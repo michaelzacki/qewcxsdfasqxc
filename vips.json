@@ -1,40 +1,97 @@
 {
-    "vips": [
-        {
-            "steamId": 76561198107770040,
-            "name": "Neodra",
-            "color": [
-                0.0,
-                0.0,
-                1.0,
-                1.0
-            ],
-            "joinSound": "join_neodra.wav",
-            "isRainbow": false,
-            "isBreathing": true,
-            "hasFireParticles": false,
-            "badgeIcon": "",
-            "symbols": [],
-            "borderColor": [
-                0.0,
-                0.0,
-                1.0,
-                1.0
-            ],
-            "hasWavyFlame": false
-        },
-        {
-            "steamId": 76561198179520425,
-            "name": "",
-            "color": [],
-            "joinSound": "join_egos630.wav",
-            "isRainbow": false,
-            "isBreathing": false,
-            "hasFireParticles": false,
-            "badgeIcon": "",
-            "symbols": [],
-            "borderColor": [],
-            "hasWavyFlame": false
-        }
-    ]
+  "vips": [
+    {
+      "steamId": 76561198107770040,
+      "name": "Neodra",
+      "color": [
+        0.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "joinSound": "join_unholy.wav",
+      "isRainbow": false,
+      "isBreathing": true,
+      "hasFireParticles": false,
+      "badgeIcon": "",
+      "symbols": [],
+      "borderColor": [
+        0.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "hasWavyFlame": false
+    },
+    {
+      "steamId": 76561198179520425,
+      "name": "",
+      "color": [],
+      "joinSound": "join_sax.wav",
+      "isRainbow": false,
+      "isBreathing": false,
+      "hasFireParticles": false,
+      "badgeIcon": "",
+      "symbols": [],
+      "borderColor": [],
+      "hasWavyFlame": false
+    },
+    {
+      "steamId": 76561198171675757,
+      "name": "",
+      "color": [],
+      "joinSound": "join_versatile.wav",
+      "isRainbow": false,
+      "isBreathing": false,
+      "hasFireParticles": false,
+      "badgeIcon": "",
+      "symbols": [],
+      "borderColor": [
+        1.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "hasWavyFlame": false
+    },
+    {
+      "steamId": 76561198096170481,
+      "name": "",
+      "color": [],
+      "joinSound": "join_pembe.wav",
+      "isRainbow": false,
+      "isBreathing": false,
+      "hasFireParticles": false,
+      "badgeIcon": "",
+      "symbols": [],
+      "borderColor": [],
+      "hasWavyFlame": false
+    },
+    {
+      "steamId": 76561198121115010,
+      "name": "",
+      "color": [],
+      "joinSound": "join_hisback.wav",
+      "isRainbow": false,
+      "isBreathing": false,
+      "hasFireParticles": false,
+      "badgeIcon": "",
+      "symbols": [],
+      "borderColor": [],
+      "hasWavyFlame": false
+    },
+    {
+      "steamId": 76561198077154215,
+      "name": "",
+      "color": [],
+      "joinSound": "join_yarra.wav",
+      "isRainbow": false,
+      "isBreathing": false,
+      "hasFireParticles": false,
+      "badgeIcon": "",
+      "symbols": [],
+      "borderColor": [],
+      "hasWavyFlame": false
+    }
+  ]
 }
