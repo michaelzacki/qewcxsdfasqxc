@@ -50,7 +50,7 @@
         1.0,
         1.0
       ],
-      "joinSound": "join_unholy.wav",
+      "joinSound": "join_redlight.wav",
       "isRainbow": false,
       "isBreathing": true,
       "hasFireParticles": false,
