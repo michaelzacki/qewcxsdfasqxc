@@ -38,8 +38,11 @@ export default async function handler(req, res) {
       p.assists += (data.assists || 0);
       p.damage_dealt += (data.damage_dealt || 0);
       p.damage_taken += (data.damage_taken || 0);
-      p.sessions += 1;
-
+      
+      if (data.is_sessiond_end) {
+        p.sessions += 1;
+      }
+      
       p.name = data.name || p.name;
       p.mmr = data.mmr || p.mmr; 
       p.rank = data.rank || p.rank;
