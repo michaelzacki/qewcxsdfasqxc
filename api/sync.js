@@ -27,7 +27,7 @@ export default async function handler(req, res) {
       if (!globals[player_id]) {
         globals[player_id] = {
           kills: 0, deaths: 0, assists: 0, damage_dealt: 0, damage_taken: 0, sessions: 0,
-          name: data.name || "Unknown", mmr: 1000, rank: "Unranked"
+          name: data.name || "Unknown", mmr: 1000, rank: "Golden Combatant"
         };
       }
 
