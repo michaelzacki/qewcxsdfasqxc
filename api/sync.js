@@ -10,7 +10,7 @@ export default async function handler(req, res) {
 
   if (req.method === 'GET') {
     try {
-      const globals = await redis.get('globals') || {};
+      const globals = await redis.hgetall('globals_hash') || {};
       return res.status(200).json(globals);
     } catch (error) {
       return res.status(500).json({ error: 'Read error' });
@@ -22,16 +22,10 @@ export default async function handler(req, res) {
     if (!player_id) return res.status(400).json({ error: 'player_id needed' });
 
     try {
-      let globals = await redis.get('globals') || {};
-      
-      if (!globals[player_id]) {
-        globals[player_id] = {
-          kills: 0, deaths: 0, assists: 0, damage_dealt: 0, damage_taken: 0, sessions: 0,
-          name: data.name || "Unknown", mmr: 1000, rank: "Golden Combatant"
-        };
-      }
-
-      let p = globals[player_id];
+      let p = await redis.hget('globals_hash', player_id) || {
+        kills: 0, deaths: 0, assists: 0, damage_dealt: 0, damage_taken: 0, sessions: 0,
+        name: data.name || "Unknown", mmr: 1000, rank: "Golden Combatant"
+      };
 
       p.kills += (data.kills || 0);
       p.deaths += (data.deaths || 0);
@@ -43,18 +37,17 @@ export default async function handler(req, res) {
         p.sessions += 1;
       }
       
-      p.name = data.name || p.name;
-      p.mmr = data.mmr || p.mmr; 
-      p.rank = data.rank || p.rank;
-      p.level = data.level || p.level;
-      p.is_mod_user = data.is_mod_user || p.is_mod_user;
+      p.name = data.name ?? p.name;
+      p.mmr = data.mmr ?? p.mmr; 
+      p.rank = data.rank ?? p.rank;
+      p.level = data.level ?? p.level;
+      p.is_mod_user = data.is_mod_user ?? p.is_mod_user;
       
-      p.weapons = data.weapons || p.weapons;
-      p.armors = data.armors || p.armors;
-      p.talismans = data.talismans || p.talismans;
+      p.weapons = data.weapons ?? p.weapons;
+      p.armors = data.armors ?? p.armors;
+      p.talismans = data.talismans ?? p.talismans;
 
-      globals[player_id] = p;
-      await redis.set('globals', globals);
+      await redis.hset('globals_hash', { [player_id]: p });
       
       return res.status(200).json({ success: true });
     } catch (error) {
