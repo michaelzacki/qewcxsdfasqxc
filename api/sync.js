@@ -25,7 +25,7 @@ export default async function handler(req, res) {
 
       let p = await redis.hget('globals_hash', player_id) || {
         kills: 0, deaths: 0, assists: 0, damage_dealt: 0, damage_taken: 0, sessions: 0,
-        phantom_hits: 0, // YENİ
+        phantom_hits: 0,
         name: data.name || "Unknown", mmr: 1000, rank: "Golden Combatant"
       };
 
