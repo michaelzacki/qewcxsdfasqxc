@@ -22,8 +22,10 @@ export default async function handler(req, res) {
     if (!player_id) return res.status(400).json({ error: 'player_id needed' });
 
     try {
+
       let p = await redis.hget('globals_hash', player_id) || {
         kills: 0, deaths: 0, assists: 0, damage_dealt: 0, damage_taken: 0, sessions: 0,
+        phantom_hits: 0, // YENİ
         name: data.name || "Unknown", mmr: 1000, rank: "Golden Combatant"
       };
 
@@ -32,6 +34,17 @@ export default async function handler(req, res) {
       p.assists += (data.assists || 0);
       p.damage_dealt += (data.damage_dealt || 0);
       p.damage_taken += (data.damage_taken || 0);
+      
+      p.phantom_hits = (p.phantom_hits || 0) + (data.phantom_hits || 0);
+
+      p.damage_breakdown = p.damage_breakdown || { physical: 0, magic: 0, fire: 0, lightning: 0, holy: 0 };
+      if (data.damage_breakdown) {
+          p.damage_breakdown.physical += (data.damage_breakdown.physical || 0);
+          p.damage_breakdown.magic += (data.damage_breakdown.magic || 0);
+          p.damage_breakdown.fire += (data.damage_breakdown.fire || 0);
+          p.damage_breakdown.lightning += (data.damage_breakdown.lightning || 0);
+          p.damage_breakdown.holy += (data.damage_breakdown.holy || 0);
+      }
       
       if (data.is_session_end) {
         p.sessions += 1;
@@ -46,6 +59,8 @@ export default async function handler(req, res) {
       p.weapons = data.weapons ?? p.weapons;
       p.armors = data.armors ?? p.armors;
       p.talismans = data.talismans ?? p.talismans;
+
+      p.stats = data.stats ?? p.stats;
 
       await redis.hset('globals_hash', { [player_id]: p });
       
