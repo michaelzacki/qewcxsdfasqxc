@@ -1,6 +1,8 @@
 import { Redis } from '@upstash/redis';
 const redis = Redis.fromEnv();
 
+const CURRENT_SERVER_VERSION = "1.0.0";
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -18,8 +20,16 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'POST') {
-    const { player_id, data } = req.body;
+    const { player_id, data, mod_version } = req.body;
+    
     if (!player_id) return res.status(400).json({ error: 'player_id needed' });
+
+    if (!mod_version || mod_version !== CURRENT_SERVER_VERSION) {
+        return res.status(403).json({ 
+            error: 'OUTDATED_CLIENT', 
+            message: `Force update required. Server requires v${CURRENT_SERVER_VERSION}, but client is v${mod_version || "unknown"}` 
+        });
+    }
 
     try {
 
@@ -28,13 +38,12 @@ export default async function handler(req, res) {
         phantom_hits: 0,
         name: data.name || "Unknown", mmr: 1000, rank: "Golden Combatant"
       };
-
+      
       p.kills += (data.kills || 0);
       p.deaths += (data.deaths || 0);
       p.assists += (data.assists || 0);
       p.damage_dealt += (data.damage_dealt || 0);
       p.damage_taken += (data.damage_taken || 0);
-      
       p.phantom_hits = (p.phantom_hits || 0) + (data.phantom_hits || 0);
 
       p.damage_breakdown = p.damage_breakdown || { physical: 0, magic: 0, fire: 0, lightning: 0, holy: 0 };
@@ -49,7 +58,7 @@ export default async function handler(req, res) {
       if (data.is_session_end) {
         p.sessions += 1;
       }
-      
+
       p.name = data.name ?? p.name;
       p.mmr = data.mmr ?? p.mmr; 
       p.rank = data.rank ?? p.rank;
@@ -59,7 +68,6 @@ export default async function handler(req, res) {
       p.weapons = data.weapons ?? p.weapons;
       p.armors = data.armors ?? p.armors;
       p.talismans = data.talismans ?? p.talismans;
-
       p.stats = data.stats ?? p.stats;
 
       await redis.hset('globals_hash', { [player_id]: p });
