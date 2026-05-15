@@ -3,10 +3,12 @@ const redis = Redis.fromEnv();
 
 const CURRENT_SERVER_VERSION = "1.0.0";
 
+const SECRET_API_KEY = process.env.API_SECRET_KEY; 
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-api-key');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
@@ -20,8 +22,13 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'POST') {
+
+    const clientApiKey = req.headers['x-api-key'];
+    if (!clientApiKey || clientApiKey !== SECRET_API_KEY) {
+        return res.status(401).json({ error: 'UNAUTHORIZED', message: '31' });
+    }
+
     const { player_id, data, mod_version } = req.body;
-    
     if (!player_id) return res.status(400).json({ error: 'player_id needed' });
 
     if (!mod_version || mod_version !== CURRENT_SERVER_VERSION) {
@@ -32,13 +39,19 @@ export default async function handler(req, res) {
     }
 
     try {
-
       let p = await redis.hget('globals_hash', player_id) || {
         kills: 0, deaths: 0, assists: 0, damage_dealt: 0, damage_taken: 0, sessions: 0,
-        phantom_hits: 0,
-        name: data.name || "Unknown", mmr: 1000, rank: "Golden Combatant"
+        phantom_hits: 0, name: data.name || "Unknown", mmr: 1000, rank: "Golden Combatant",
+        last_request_time: 0
       };
-      
+
+      const now = Date.now();
+
+      if (p.last_request_time && (now - p.last_request_time < 5000)) {
+          return res.status(429).json({ error: 'TOO_MANY_REQUESTS', message: 'Too many requests.' });
+      }
+      p.last_request_time = now;
+
       p.kills += (data.kills || 0);
       p.deaths += (data.deaths || 0);
       p.assists += (data.assists || 0);
@@ -58,7 +71,7 @@ export default async function handler(req, res) {
       if (data.is_session_end) {
         p.sessions += 1;
       }
-
+      
       p.name = data.name ?? p.name;
       p.mmr = data.mmr ?? p.mmr; 
       p.rank = data.rank ?? p.rank;
