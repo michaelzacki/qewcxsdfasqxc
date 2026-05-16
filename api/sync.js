@@ -30,9 +30,9 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'POST') {
-
     const clientApiKey = req.headers['x-api-key'];
-    if (!clientApiKey || clientApiKey !== SECRET_API_KEY) {
+    
+    if (!clientApiKey || clientApiKey.trim() !== SECRET_API_KEY) {
         return res.status(401).json({ error: 'UNAUTHORIZED', message: '31' });
     }
 
@@ -42,20 +42,30 @@ export default async function handler(req, res) {
     if (!mod_version || mod_version !== CURRENT_SERVER_VERSION) {
         return res.status(403).json({ 
             error: 'OUTDATED_CLIENT', 
-            message: `Force update required. Server requires v${CURRENT_SERVER_VERSION}, but client is v${mod_version || "unknown"}` 
+            message: `Force update required.` 
         });
     }
 
     try {
-      let p = await redis.hget('globals_hash', player_id) || {
-        kills: 0, deaths: 0, assists: 0, damage_dealt: 0, damage_taken: 0, sessions: 0,
-        phantom_hits: 0, name: data.name || "Unknown", mmr: 1000, rank: "Golden Combatant",
-        last_request_time: 0
-      };
+      let pStr = await redis.hget('globals_hash', player_id);
+      let p = null;
+      if (typeof pStr === 'string') {
+          try { p = JSON.parse(pStr); } catch(e) { }
+      } else {
+          p = pStr;
+      }
+
+      if (!p || typeof p !== 'object') {
+          p = {
+            kills: 0, deaths: 0, assists: 0, damage_dealt: 0, damage_taken: 0, sessions: 0,
+            phantom_hits: 0, name: data.name || "Unknown", mmr: 1000, rank: "Golden Combatant",
+            last_request_time: 0
+          };
+      }
 
       const now = Date.now();
-
-      if (p.last_request_time && (now - p.last_request_time < 5000)) {
+      
+      if (p.last_request_time && (now - p.last_request_time < 1500)) {
           return res.status(429).json({ error: 'TOO_MANY_REQUESTS', message: 'Too many requests.' });
       }
       p.last_request_time = now;
@@ -76,9 +86,7 @@ export default async function handler(req, res) {
           p.damage_breakdown.holy += (data.damage_breakdown.holy || 0);
       }
       
-      if (data.is_session_end) {
-        p.sessions += 1;
-      }
+      if (data.is_session_end) p.sessions += 1;
       
       p.name = data.name ?? p.name;
       p.mmr = data.mmr ?? p.mmr; 
@@ -92,7 +100,6 @@ export default async function handler(req, res) {
       p.stats = data.stats ?? p.stats;
 
       await redis.hset('globals_hash', { [player_id]: p });
-      
       return res.status(200).json({ success: true });
     } catch (error) {
       return res.status(500).json({ error: 'Write error' });
