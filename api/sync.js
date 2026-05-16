@@ -15,6 +15,14 @@ export default async function handler(req, res) {
   if (req.method === 'GET') {
     try {
       const globals = await redis.hgetall('globals_hash') || {};
+      
+      for (let key in globals) {
+         if (typeof globals[key] === 'string') {
+             try { 
+                 globals[key] = JSON.parse(globals[key]); 
+             } catch(e) { }
+         }
+      }
       return res.status(200).json(globals);
     } catch (error) {
       return res.status(500).json({ error: 'Read error' });
