@@ -70,11 +70,11 @@ export default async function handler(req, res) {
       }
       p.last_request_time = now;
 
-      p.kills += (data.kills || 0);
-      p.deaths += (data.deaths || 0);
-      p.assists += (data.assists || 0);
-      p.damage_dealt += (data.damage_dealt || 0);
-      p.damage_taken += (data.damage_taken || 0);
+      p.kills = (p.kills || 0) + (data.kills || 0);
+      p.deaths = (p.deaths || 0) + (data.deaths || 0);
+      p.assists = (p.assists || 0) + (data.assists || 0);
+      p.damage_dealt = (p.damage_dealt || 0) + (data.damage_dealt || 0);
+      p.damage_taken = (p.damage_taken || 0) + (data.damage_taken || 0);
       p.phantom_hits = (p.phantom_hits || 0) + (data.phantom_hits || 0);
 
       p.damage_breakdown = p.damage_breakdown || { physical: 0, magic: 0, fire: 0, lightning: 0, holy: 0 };
