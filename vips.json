@@ -17,7 +17,14 @@
     "players_left.wav",
     "rampage.wav",
     "ultrakill.wav",
-    "you_have_mutated.wav"
+    "you_have_mutated.wav",
+    "unstoppable.wav",
+    "Invulnerable.wav",
+    "Ownage.wav",
+    "WhickedSick.wav",
+    "Slaughter.wav",
+    "Confusion.wav",
+    "Denied.wav"
   ],
   "core_icons": [
     "assists_handshake.png",
