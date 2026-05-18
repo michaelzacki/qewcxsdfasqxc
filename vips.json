@@ -24,7 +24,13 @@
     "WhickedSick.wav",
     "Slaughter.wav",
     "Confusion.wav",
-    "Denied.wav"
+    "Denied.wav",
+    "invasion_found_spirit_calling_bell.wav",
+    "invasion_found_spectral_steed_whistle.wav",
+    "invasion_found_player_level_up.wav",
+    "invasion_found_new_location.wav",
+    "invasion_found_host.wav",
+    "invasion_found_bloody_finger.wav"
   ],
   "core_icons": [
     "assists_handshake.png",
