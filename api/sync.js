@@ -118,10 +118,8 @@ export default async function handler(req, res) {
       if (data.is_session_end) p.sessions += 1;
 
       p.name = data.name ?? p.name;
-      if (data.is_session_end || !p.mmr) {
-        p.mmr = data.mmr ?? p.mmr;
-        p.rank = data.rank ?? p.rank;
-      }
+      p.mmr = data.mmr ?? p.mmr;
+      p.rank = data.rank ?? p.rank;
       p.level = data.level ?? p.level;
       p.is_mod_user = data.is_mod_user ?? p.is_mod_user;
 
