@@ -2,7 +2,7 @@ import { Redis } from '@upstash/redis';
 import crypto from 'crypto';
 const redis = Redis.fromEnv();
 
-const CURRENT_SERVER_VERSION = "1.0.1";
+const CURRENT_SERVER_VERSION = "1.0.0";
 
 const SECRET_API_KEY = process.env.API_SECRET_KEY;
 const HMAC_SECRET = process.env.HMAC_SECRET_KEY;
