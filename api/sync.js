@@ -75,6 +75,8 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: 'INVALID_SIGNATURE', message: 'Tampered data rejected.' });
     }
 
+    console.log(`[1] after sign: [SYNC INCOMING] Player: ${data.name} | SteamID: ${player_id} | MMR: ${data.mmr}`);
+    
     try {
       let pStr = await redis.hget('globals_hash', player_id);
       let p = null;
@@ -98,6 +100,8 @@ export default async function handler(req, res) {
         return res.status(429).json({ error: 'TOO_MANY_REQUESTS', message: 'Too many requests.' });
       }
       p.last_request_time = now;
+      
+      console.log(`[2] after p.last_request_time [SYNC INCOMING] Player: ${data.name} | SteamID: ${player_id} | MMR: ${data.mmr}`);
 
       p.kills = (p.kills || 0) + (data.kills || 0);
       p.deaths = (p.deaths || 0) + (data.deaths || 0);
