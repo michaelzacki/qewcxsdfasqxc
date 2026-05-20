@@ -118,10 +118,23 @@ export default async function handler(req, res) {
       if (data.is_session_end) p.sessions += 1;
 
       p.name = data.name ?? p.name;
-      p.mmr = data.mmr ?? p.mmr;
-      p.rank = data.rank ?? p.rank;
       p.level = data.level ?? p.level;
       p.is_mod_user = data.is_mod_user ?? p.is_mod_user;
+
+      // ==========================================
+      // MMR FAILSAFE / SANITY CHECK
+      // If client reports a default startup MMR (1000) while server has
+      // a significantly higher MMR, ignore client's overwrite to prevent data loss.
+      // ==========================================
+      if (data.mmr !== undefined) {
+        if (data.mmr === 1000 && p.mmr > 1050) {
+          console.log(`[FAILSAFE] MMR Override Prevented for ${player_id}. Server: ${p.mmr}, Client sent: ${data.mmr}`);
+          // Do not change p.mmr or p.rank
+        } else {
+          p.mmr = data.mmr;
+          p.rank = data.rank ?? p.rank;
+        }
+      }
 
       p.weapons = data.weapons ?? p.weapons;
       p.armors = data.armors ?? p.armors;
