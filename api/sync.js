@@ -125,11 +125,6 @@ export default async function handler(req, res) {
       p.level = data.level ?? p.level;
       p.is_mod_user = data.is_mod_user ?? p.is_mod_user;
 
-      // ==========================================
-      // MMR FAILSAFE / SANITY CHECK
-      // If client reports a default startup MMR (1000) while server has
-      // a significantly higher MMR, ignore client's overwrite to prevent data loss.
-      // ==========================================
       if (data.mmr !== undefined) {
         if (data.mmr === 1000 && p.mmr > 1050) {
           console.log(`[FAILSAFE] MMR Override Prevented for ${player_id}. Server: ${p.mmr}, Client sent: ${data.mmr}`);
@@ -145,7 +140,8 @@ export default async function handler(req, res) {
       p.talismans = data.talismans ?? p.talismans;
       p.stats = data.stats ?? p.stats;
 
-      await redis.hset('globals_hash', { [player_id]: p });
+      //await redis.hset('globals_hash', { [player_id]: p });
+      await redis.hset('globals_hash', player_id, JSON.stringify(p));
       return res.status(200).json({ success: true });
     } catch (error) {
       return res.status(500).json({ error: 'Write error' });
