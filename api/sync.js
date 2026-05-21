@@ -60,7 +60,9 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: 'UNAUTHORIZED', message: '31' });
     }
 
-    const { player_id, data, mod_version, signature } = req.body;
+    const { player_id: raw_player_id, data, mod_version, signature } = req.body;
+    const player_id = String(raw_player_id); 
+
     if (!player_id) return res.status(400).json({ error: 'player_id needed' });
 
     if (!mod_version || mod_version !== CURRENT_SERVER_VERSION) {
