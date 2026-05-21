@@ -1,11 +1,29 @@
 import { Redis } from '@upstash/redis';
 import crypto from 'crypto';
+import JSONBig from 'json-bigint';
+
 const redis = Redis.fromEnv();
+const JSONBigString = JSONBig({ storeAsString: true });
 
 const CURRENT_SERVER_VERSION = "1.0.1";
 
 const SECRET_API_KEY = process.env.API_SECRET_KEY;
 const HMAC_SECRET = process.env.HMAC_SECRET_KEY;
+
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
+async function getRawBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', chunk => body += chunk.toString());
+    req.on('end', () => resolve(body));
+    req.on('error', reject);
+  });
+}
 
 function verifySignature(playerId, data, modVersion, clientSig) {
   if (!HMAC_SECRET || !clientSig) return false;
@@ -60,8 +78,16 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: 'UNAUTHORIZED', message: '31' });
     }
 
-    const { player_id: raw_player_id, data, mod_version, signature } = req.body;
-    const player_id = String(raw_player_id); 
+    let body;
+    try {
+      const rawBody = await getRawBody(req);
+      body = JSONBigString.parse(rawBody);
+    } catch (e) {
+      return res.status(400).json({ error: 'Invalid JSON body' });
+    }
+
+    const { player_id: raw_player_id, data, mod_version, signature } = body;
+    const player_id = String(raw_player_id);
 
     if (!player_id) return res.status(400).json({ error: 'player_id needed' });
 
@@ -73,14 +99,14 @@ export default async function handler(req, res) {
     }
 
     // HMAC-SHA256 Anti-Tamper Verification
-    if (!verifySignature(`${player_id}`, data, mod_version, signature)) {
+    if (!verifySignature(player_id, data, mod_version, signature)) {
       return res.status(403).json({ error: 'INVALID_SIGNATURE', message: 'Tampered data rejected.' });
     }
 
     console.log(`[1] after sign: [SYNC INCOMING] Player: ${data.name} | SteamID: ${player_id} | MMR: ${data.mmr}`);
-    
+
     try {
-      let pStr = await redis.hget('globals_hash', `${player_id}`);
+      let pStr = await redis.hget('globals_hash', player_id);
       let p = null;
       if (typeof pStr === 'string') {
         try { p = JSON.parse(pStr); } catch (e) { }
@@ -102,7 +128,7 @@ export default async function handler(req, res) {
         return res.status(429).json({ error: 'TOO_MANY_REQUESTS', message: 'Too many requests.' });
       }
       p.last_request_time = now;
-      
+
       console.log(`[2] after p.last_request_time [SYNC INCOMING] Player: ${data.name} | SteamID: ${player_id} | MMR: ${data.mmr}`);
 
       p.kills = (p.kills || 0) + (data.kills || 0);
@@ -142,9 +168,7 @@ export default async function handler(req, res) {
       p.talismans = data.talismans ?? p.talismans;
       p.stats = data.stats ?? p.stats;
 
-      //await redis.hset('globals_hash', { [player_id]: p });
-      //await redis.hset('globals_hash', { [player_id]: JSON.stringify(p) });
-      await redis.hset('globals_hash', { [`${player_id}`]: JSON.stringify(p) });
+      await redis.hset('globals_hash', { [player_id]: JSON.stringify(p) });
       return res.status(200).json({ success: true });
     } catch (error) {
       return res.status(500).json({ error: 'Write error' });
