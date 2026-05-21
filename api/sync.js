@@ -73,14 +73,14 @@ export default async function handler(req, res) {
     }
 
     // HMAC-SHA256 Anti-Tamper Verification
-    if (!verifySignature(player_id, data, mod_version, signature)) {
+    if (!verifySignature(`${player_id}`, data, mod_version, signature)) {
       return res.status(403).json({ error: 'INVALID_SIGNATURE', message: 'Tampered data rejected.' });
     }
 
     console.log(`[1] after sign: [SYNC INCOMING] Player: ${data.name} | SteamID: ${player_id} | MMR: ${data.mmr}`);
     
     try {
-      let pStr = await redis.hget('globals_hash', player_id);
+      let pStr = await redis.hget('globals_hash', `${player_id}`);
       let p = null;
       if (typeof pStr === 'string') {
         try { p = JSON.parse(pStr); } catch (e) { }
@@ -143,7 +143,8 @@ export default async function handler(req, res) {
       p.stats = data.stats ?? p.stats;
 
       //await redis.hset('globals_hash', { [player_id]: p });
-      await redis.hset('globals_hash', { [player_id]: JSON.stringify(p) });
+      //await redis.hset('globals_hash', { [player_id]: JSON.stringify(p) });
+      await redis.hset('globals_hash', { [`${player_id}`]: JSON.stringify(p) });
       return res.status(200).json({ success: true });
     } catch (error) {
       return res.status(500).json({ error: 'Write error' });
