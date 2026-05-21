@@ -143,7 +143,7 @@ export default async function handler(req, res) {
       p.stats = data.stats ?? p.stats;
 
       //await redis.hset('globals_hash', { [player_id]: p });
-      await redis.hset('globals_hash', player_id, JSON.stringify(p));
+      await redis.hset('globals_hash', { [player_id]: JSON.stringify(p) });
       return res.status(200).json({ success: true });
     } catch (error) {
       return res.status(500).json({ error: 'Write error' });
