@@ -106,7 +106,7 @@ export default async function handler(req, res) {
     console.log(`[1] after sign: [SYNC INCOMING] Player: ${data.name} | SteamID: ${player_id} | MMR: ${data.mmr}`);
 
     try {
-      let pStr = await redis.hget('globals_hash', player_id);
+      let pStr = await redis.hget('globals_hash', `steam:${player_id}`);
       let p = null;
       if (typeof pStr === 'string') {
         try { p = JSON.parse(pStr); } catch (e) { }
@@ -168,7 +168,7 @@ export default async function handler(req, res) {
       p.talismans = data.talismans ?? p.talismans;
       p.stats = data.stats ?? p.stats;
 
-      await redis.hset('globals_hash', { [player_id]: JSON.stringify(p) });
+      await redis.hset('globals_hash', { [`steam:${player_id}`]: JSON.stringify(p) });
       return res.status(200).json({ success: true });
     } catch (error) {
       return res.status(500).json({ error: 'Write error' });
