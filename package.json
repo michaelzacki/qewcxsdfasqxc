@@ -2,6 +2,7 @@
   "name": "ervs-mod-api",
   "version": "1.0.0",
   "dependencies": {
-    "@upstash/redis": "latest"
+    "@upstash/redis": "latest",
+    "json-bigint": "^1.0.0"
   }
 }
