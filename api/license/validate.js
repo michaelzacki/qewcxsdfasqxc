@@ -28,11 +28,15 @@ export default async function handler(req, res) {
   const { key, steam_id, hwid, signature } = req.body;
 
   if (!key || !steam_id || !hwid) {
-    return res.status(400).json({ valid: false, reason: 'missing_params', message: 'Eksik parametreler.' });
+    return res.status(400).json({ valid: false, reason: 'missing_params', message: 'Missing parameters.' });
   }
 
+  if (steam_id === "0") {
+    return res.status(400).json({ valid: false, reason: 'invalid_steam', message: 'Could not verify Steam ID.' });
+  }
+  
   if (!verifySignature({ key, steam_id, hwid }, signature)) {
-    return res.status(403).json({ valid: false, reason: 'invalid_signature', message: 'Veri bütünlüğü doğrulanamadı. (Tampering Detected)' });
+    return res.status(403).json({ valid: false, reason: 'invalid_signature', message: 'Data integrity could not be verified. (Tampering Detected)' });
   }
 
   try {
@@ -40,18 +44,18 @@ export default async function handler(req, res) {
     const isHwidBanned = await redis.sismember('banned_hwids', hwid);
 
     if (isSteamBanned || isHwidBanned) {
-      return res.status(403).json({ valid: false, reason: 'banned', message: 'Bu donanım veya hesap moddan KALICI OLARAK UZAKLAŞTIRILMIŞTIR.' });
+      return res.status(403).json({ valid: false, reason: 'banned', message: 'This hardware or account has been PERMANENTLY BANNED from the mod.' });
     }
 
     const licenseStr = await redis.get(`license:${key}`);
     if (!licenseStr) {
-      return res.status(404).json({ valid: false, reason: 'invalid_key', message: 'Lisans anahtarı geçersiz veya bulunamadı.' });
+      return res.status(404).json({ valid: false, reason: 'invalid_key', message: 'License key is invalid or not found.' });
     }
 
     let license = typeof licenseStr === 'string' ? JSON.parse(licenseStr) : licenseStr;
 
     if (license.banned) {
-      return res.status(403).json({ valid: false, reason: 'banned', message: 'Bu lisans anahtarı iptal edilmiştir.' });
+      return res.status(403).json({ valid: false, reason: 'banned', message: 'This license key has been revoked.' });
     }
 
     const now = new Date();
@@ -63,13 +67,13 @@ export default async function handler(req, res) {
 
     const expiresAt = new Date(license.expires_at);
     if (now > expiresAt) {
-      return res.status(403).json({ valid: false, reason: 'expired', message: 'Lisans süreniz dolmuştur.' });
+      return res.status(403).json({ valid: false, reason: 'expired', message: 'Your license has expired.' });
     }
 
     if (!license.accounts) license.accounts = [];
     if (!license.accounts.includes(steam_id)) {
       if (license.accounts.length >= license.max_accounts) {
-        return res.status(403).json({ valid: false, reason: 'max_accounts_reached', message: `Bu anahtar maksimum Steam hesabı sınırına (${license.max_accounts}) ulaştı.` });
+        return res.status(403).json({ valid: false, reason: 'max_accounts_reached', message: `This key has reached the maximum Steam account limit (${license.max_accounts}).` });
       }
       license.accounts.push(steam_id);
     }
@@ -77,14 +81,14 @@ export default async function handler(req, res) {
     if (!license.devices) license.devices = [];
     if (!license.devices.includes(hwid)) {
       if (license.devices.length >= license.max_devices) {
-        return res.status(403).json({ valid: false, reason: 'max_devices_reached', message: `Bu anahtar maksimum donanım (HWID) sınırına (${license.max_devices}) ulaştı.` });
+        return res.status(403).json({ valid: false, reason: 'max_devices_reached', message: `This key has reached the maximum hardware limit (${license.max_devices}).` });
       }
       license.devices.push(hwid);
     }
 
     await redis.set(`license:${key}`, JSON.stringify(license));
 
-    const daysRemaining = Math.ceil((expiresAt - now) / (1000 * 60 * 60 * 24));
+    const daysRemaining = Math.floor((expiresAt - now) / (1000 * 60 * 60 * 24));
 
     return res.status(200).json({
       valid: true,
@@ -98,6 +102,6 @@ export default async function handler(req, res) {
 
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ valid: false, reason: 'server_error', message: 'Sunucu hatası oluştu.' });
+    return res.status(500).json({ valid: false, reason: 'server_error', message: 'A server error occurred.' });
   }
 }
