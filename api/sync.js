@@ -61,8 +61,11 @@ export default async function handler(req, res) {
 
     if (action === 'season') {
       try {
-        let currentSeason = await redis.get('season:current');
-        if (!currentSeason) {
+        let raw = await redis.get('season:current');
+        console.log('[SEASON] Raw from Redis:', typeof raw, JSON.stringify(raw));
+        
+        let currentSeason = null;
+        if (!raw) {
           // Initialize season 1 if it doesn't exist
           const now = new Date();
           const endDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
@@ -73,24 +76,36 @@ export default async function handler(req, res) {
             status: "active"
           };
           await redis.set('season:current', JSON.stringify(currentSeason));
-        } else if (typeof currentSeason === 'string') {
-          currentSeason = JSON.parse(currentSeason);
+        } else if (typeof raw === 'string') {
+          try { currentSeason = JSON.parse(raw); } catch(e) { currentSeason = null; }
+        } else if (typeof raw === 'object') {
+          currentSeason = raw;
+        }
+        
+        if (!currentSeason || !currentSeason.season_id) {
+          console.log('[SEASON] Failed to parse season data, raw:', raw);
+          return res.status(500).json({ error: 'Season data corrupted', raw_type: typeof raw, raw: String(raw).substring(0, 200) });
         }
         
         const seasonId = currentSeason.season_id;
         
         // Fetch top 10 leaderboard
-        const top10 = await redis.zrevrange(`season:${seasonId}:leaderboard`, 0, 9, { withScores: true });
-        
         let leaderboard = [];
-        for (let i = 0; i < top10.length; i += 2) {
-            let sId = top10[i];
-            if (sId.startsWith("steam:")) sId = sId.replace("steam:", "");
-            leaderboard.push({
-                steam_id: sId,
-                mmr: top10[i+1],
-                placement: (i/2) + 1
-            });
+        try {
+            const top10 = await redis.zrevrange(`season:${seasonId}:leaderboard`, 0, 9, { withScores: true });
+            if (top10 && Array.isArray(top10)) {
+                for (let i = 0; i < top10.length; i += 2) {
+                    let sId = String(top10[i]);
+                    if (sId.startsWith("steam:")) sId = sId.replace("steam:", "");
+                    leaderboard.push({
+                        steam_id: sId,
+                        mmr: parseInt(top10[i+1]) || 0,
+                        placement: (i/2) + 1
+                    });
+                }
+            }
+        } catch(e) {
+            console.error('[SEASON] Leaderboard fetch error:', e);
         }
         
         // Optionally fetch rewards for the requesting player if steam_id is provided
@@ -109,7 +124,8 @@ export default async function handler(req, res) {
           my_rewards: my_rewards
         });
       } catch (error) {
-        return res.status(500).json({ error: 'Season read error' });
+        console.error('[SEASON] Top-level error:', error);
+        return res.status(500).json({ error: 'Season read error', details: error.message });
       }
     }
 
