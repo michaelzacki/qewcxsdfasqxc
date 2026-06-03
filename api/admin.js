@@ -120,16 +120,81 @@ export default async function handler(req, res) {
       return res.status(200).json({ success: true, season: newSeason });
     }
 
+    if (action === 'give_item') {
+      const { steam_id, item } = payload;
+      if (!steam_id || !item) return res.status(400).json({ error: 'Missing steam_id or item' });
+      
+      const key = `steam:${steam_id}`;
+      let existingStr = await redis.hget('globals_hash', key);
+      let existingData = existingStr ? (typeof existingStr === 'string' ? JSON.parse(existingStr) : existingStr) : {};
+      
+      if (!existingData.pending_items) existingData.pending_items = [];
+      existingData.pending_items.push(item);
+      
+      await redis.hset('globals_hash', { [key]: JSON.stringify(existingData) });
+      return res.status(200).json({ success: true, message: 'Item queued for delivery.' });
+    }
+
     if (action === 'end_season') {
-      // End the current season: snapshot globals_hash, archive season meta
+      // End the current season: snapshot globals_hash, archive season meta, assign rewards
       let currentSeasonStr = await redis.get('season:current');
       if (!currentSeasonStr) return res.status(400).json({ error: 'No active season to end' });
       
       let currentSeason = typeof currentSeasonStr === 'string' ? JSON.parse(currentSeasonStr) : currentSeasonStr;
       const seasonId = currentSeason.season_id;
       
-      // 1. Snapshot globals_hash
+      // 1. Snapshot globals_hash & Assign permanent rewards
       const globals = await redis.hgetall('globals_hash') || {};
+      
+      // Fetch top 3 to assign rewards
+      let topPlayers = [];
+      try {
+        const top = await redis.zrevrange(`season:${seasonId}:leaderboard`, 0, 2, { withScores: true });
+        if (top && Array.isArray(top)) {
+            for (let i = 0; i < top.length; i += 2) {
+                let sId = String(top[i]);
+                if (sId.startsWith("steam:")) sId = sId.replace("steam:", "");
+                topPlayers.push({ steam_id: sId, placement: (i/2) + 1, mmr: parseInt(top[i+1]) });
+            }
+        }
+      } catch(e) { console.error(e); }
+
+      // Assign rewards
+      for (const player of topPlayers) {
+          const key = `steam:${player.steam_id}`;
+          let pData = globals[key];
+          if (pData) {
+              if (typeof pData === 'string') pData = JSON.parse(pData);
+              if (!pData.permanent_rewards) pData.permanent_rewards = [];
+              
+              let border = "Gold";
+              let badge = "symbol_crown.png";
+              let color = "#ffd700";
+              
+              if (player.placement === 2) { border = "Silver"; badge = ""; color = "#c0c0c0"; }
+              if (player.placement === 3) { border = "Bronze"; badge = ""; color = "#cd7f32"; }
+
+              pData.permanent_rewards.push({
+                  season_id: seasonId,
+                  placement: player.placement,
+                  border: border,
+                  badge: badge,
+                  color: color
+              });
+              
+              // Give Item Pack
+              if (!pData.pending_items) pData.pending_items = [];
+              if (player.placement === 1) {
+                  pData.pending_items.push({ id: 1100, qty: 99, reinforceLv: -1, upgrade: -1, gem: -1 }); // Example item pack
+              } else if (player.placement <= 3) {
+                  pData.pending_items.push({ id: 1100, qty: 50, reinforceLv: -1, upgrade: -1, gem: -1 });
+              }
+
+              globals[key] = JSON.stringify(pData);
+              await redis.hset('globals_hash', { [key]: globals[key] });
+          }
+      }
+
       if (Object.keys(globals).length > 0) {
         await redis.hset(`season:${seasonId}:snapshot`, globals);
       }
@@ -142,7 +207,7 @@ export default async function handler(req, res) {
       // 3. Update current as ended
       await redis.set('season:current', JSON.stringify(currentSeason));
       
-      return res.status(200).json({ success: true, message: `Season ${seasonId} ended and archived.` });
+      return res.status(200).json({ success: true, message: `Season ${seasonId} ended, snapshot taken, and rewards assigned.` });
     }
 
     if (action === 'list_seasons') {

@@ -111,17 +111,30 @@ export default async function handler(req, res) {
         // Optionally fetch rewards for the requesting player if steam_id is provided
         const steamId = url.searchParams.get('steam_id');
         let my_rewards = [];
+        let permanent_rewards = [];
+        let pending_items = [];
         if (steamId) {
             const rewardStr = await redis.hget(`season:${seasonId}:rewards`, steamId);
             if (rewardStr) {
                 try { my_rewards.push(JSON.parse(rewardStr)); } catch (e) {}
+            }
+            
+            const globalStr = await redis.hget('globals_hash', `steam:${steamId}`);
+            if (globalStr) {
+                try {
+                    let globalData = typeof globalStr === 'string' ? JSON.parse(globalStr) : globalStr;
+                    if (globalData.permanent_rewards) permanent_rewards = globalData.permanent_rewards;
+                    if (globalData.pending_items) pending_items = globalData.pending_items;
+                } catch(e) {}
             }
         }
 
         return res.status(200).json({
           season: currentSeason,
           leaderboard: leaderboard,
-          my_rewards: my_rewards
+          my_rewards: my_rewards,
+          permanent_rewards: permanent_rewards,
+          pending_items: pending_items
         });
       } catch (error) {
         console.error('[SEASON] Top-level error:', error);
@@ -287,6 +300,10 @@ export default async function handler(req, res) {
       }
 
       if (data.is_session_end) p.sessions += 1;
+      
+      if (data.clear_pending_items) {
+          p.pending_items = [];
+      }
 
       p.name = data.name ?? p.name;
       p.level = data.level ?? p.level;
