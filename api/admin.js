@@ -150,6 +150,7 @@ export default async function handler(req, res) {
       let topPlayers = [];
       try {
         const top = await redis.zrange(`season:${seasonId}:leaderboard`, 0, 2, { rev: true });
+        console.log(`[ADMIN] end_season fetched top from leaderboard:`, top);
         if (top && Array.isArray(top)) {
           for (let i = 0; i < top.length; i++) {
             let sId = String(top[i]);
@@ -157,17 +158,27 @@ export default async function handler(req, res) {
             topPlayers.push({ steam_id: sId, placement: i + 1 });
           }
         }
+        console.log(`[ADMIN] topPlayers parsed:`, topPlayers);
       } catch (e) { console.error("Leaderboard fetch error:", e); }
 
       const rewardMap = {};
       for (const tp of topPlayers) {
         rewardMap[`steam:${tp.steam_id}`] = tp.placement;
       }
+      console.log(`[ADMIN] rewardMap:`, rewardMap);
 
+      console.log(`[ADMIN] globals keys:`, Object.keys(globals));
       for (let key in globals) {
         let pStr = globals[key];
         let p = null;
-        try { p = JSON.parse(pStr); } catch (e) { }
+        try {
+          if (typeof pStr === 'string') {
+            p = JSON.parse(pStr);
+          } else if (typeof pStr === 'object' && pStr !== null) {
+            p = pStr; // Upstash already deserialized it
+          }
+        } catch (e) { console.error(`[ADMIN] Parse error for ${key}:`, e.message); }
+        console.log(`[ADMIN] Processing key=${key}, typeof pStr=${typeof pStr}, p is null=${p === null}`);
         if (p) {
           if (rewardMap[key]) {
             const placement = rewardMap[key];

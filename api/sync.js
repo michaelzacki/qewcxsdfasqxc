@@ -211,7 +211,13 @@ export default async function handler(req, res) {
         for (let key in globals) {
           let pStr = globals[key];
           let p = null;
-          try { p = JSON.parse(pStr); } catch (e) { }
+          try {
+            if (typeof pStr === 'string') {
+              p = JSON.parse(pStr);
+            } else if (typeof pStr === 'object' && pStr !== null) {
+              p = pStr;
+            }
+          } catch (e) { }
           if (p) {
             // Apply rewards if they are in top 3
             if (rewardMap[key]) {
