@@ -167,6 +167,21 @@ export default async function handler(req, res) {
       }
       console.log(`[ADMIN] rewardMap:`, rewardMap);
 
+      // SNAPSHOT FIRST: Save original data before resetting anything
+      const snapshot = {};
+      for (let key in globals) {
+        let val = globals[key];
+        if (typeof val === 'object' && val !== null) {
+          snapshot[key] = JSON.stringify(val);
+        } else {
+          snapshot[key] = val;
+        }
+      }
+      if (Object.keys(snapshot).length > 0) {
+        await redis.hset(`season:${seasonId}:snapshot`, snapshot);
+        console.log(`[ADMIN] Snapshot saved for season ${seasonId} with ${Object.keys(snapshot).length} players (BEFORE reset).`);
+      }
+
       console.log(`[ADMIN] globals keys:`, Object.keys(globals));
       for (let key in globals) {
         let pStr = globals[key];
@@ -201,7 +216,7 @@ export default async function handler(req, res) {
             let rewardObj = { season_id: seasonId, placement: placement, color: colorHex };
             if (placement === 1) {
               rewardObj.title = `S${seasonId} Champion`;
-              rewardObj.badgeIcon = "👑";
+              rewardObj.badgeIcon = "symbol_crown.png";
               p.pending_items.push({ id: 1075744784, qty: 600, reinforceLv: -1, upgrade: -1, gem: -1 });
             } else if (placement === 2) {
               rewardObj.title = `S${seasonId} Top 2`;
@@ -227,10 +242,6 @@ export default async function handler(req, res) {
           globals[key] = JSON.stringify(p);
           await redis.hset('globals_hash', { [key]: globals[key] });
         }
-      }
-
-      if (Object.keys(globals).length > 0) {
-        await redis.hset(`season:${seasonId}:snapshot`, globals);
       }
 
       currentSeason.status = 'ended';

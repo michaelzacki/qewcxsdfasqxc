@@ -193,8 +193,17 @@ export default async function handler(req, res) {
         const seasonId = currentSeason.season_id;
 
         // 1. Snapshot globals_hash to season:{id}:snapshot
-        if (Object.keys(globals).length > 0) {
-          await redis.hset(`season:${seasonId}:snapshot`, globals);
+        const snapshot = {};
+        for (let key in globals) {
+          let val = globals[key];
+          if (typeof val === 'object' && val !== null) {
+            snapshot[key] = JSON.stringify(val);
+          } else {
+            snapshot[key] = val;
+          }
+        }
+        if (Object.keys(snapshot).length > 0) {
+          await redis.hset(`season:${seasonId}:snapshot`, snapshot);
         }
 
         // --- REWARD DISTRIBUTION ---
@@ -241,7 +250,7 @@ export default async function handler(req, res) {
               let rewardObj = { season_id: seasonId, placement: placement, color: colorHex };
               if (placement === 1) {
                 rewardObj.title = `S${seasonId} Champion`;
-                rewardObj.badgeIcon = "👑"; // Crown Emoji
+                rewardObj.badgeIcon = "symbol_crown.png";
                 p.pending_items.push({ id: 1075744784, qty: 599 }); // Marika's Rune
               } else if (placement === 2) {
                 rewardObj.title = `S${seasonId} Top 2`;
