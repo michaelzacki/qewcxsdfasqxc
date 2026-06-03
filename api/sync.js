@@ -63,7 +63,7 @@ export default async function handler(req, res) {
       try {
         let raw = await redis.get('season:current');
         console.log('[SEASON] Raw from Redis:', typeof raw, JSON.stringify(raw));
-        
+
         let currentSeason = null;
         if (!raw) {
           // Initialize season 1 if it doesn't exist
@@ -77,56 +77,56 @@ export default async function handler(req, res) {
           };
           await redis.set('season:current', JSON.stringify(currentSeason));
         } else if (typeof raw === 'string') {
-          try { currentSeason = JSON.parse(raw); } catch(e) { currentSeason = null; }
+          try { currentSeason = JSON.parse(raw); } catch (e) { currentSeason = null; }
         } else if (typeof raw === 'object') {
           currentSeason = raw;
         }
-        
+
         if (!currentSeason || !currentSeason.season_id) {
           console.log('[SEASON] Failed to parse season data, raw:', raw);
           return res.status(500).json({ error: 'Season data corrupted', raw_type: typeof raw, raw: String(raw).substring(0, 200) });
         }
-        
+
         const seasonId = currentSeason.season_id;
-        
+
         // Fetch top 10 leaderboard
         let leaderboard = [];
         try {
-            const top10 = await redis.zrevrange(`season:${seasonId}:leaderboard`, 0, 9, { withScores: true });
-            if (top10 && Array.isArray(top10)) {
-                for (let i = 0; i < top10.length; i += 2) {
-                    let sId = String(top10[i]);
-                    if (sId.startsWith("steam:")) sId = sId.replace("steam:", "");
-                    leaderboard.push({
-                        steam_id: sId,
-                        mmr: parseInt(top10[i+1]) || 0,
-                        placement: (i/2) + 1
-                    });
-                }
+          const top10 = await redis.zrevrange(`season:${seasonId}:leaderboard`, 0, 9, { withScores: true });
+          if (top10 && Array.isArray(top10)) {
+            for (let i = 0; i < top10.length; i += 2) {
+              let sId = String(top10[i]);
+              if (sId.startsWith("steam:")) sId = sId.replace("steam:", "");
+              leaderboard.push({
+                steam_id: sId,
+                mmr: parseInt(top10[i + 1]) || 0,
+                placement: (i / 2) + 1
+              });
             }
-        } catch(e) {
-            console.error('[SEASON] Leaderboard fetch error:', e);
+          }
+        } catch (e) {
+          console.error('[SEASON] Leaderboard fetch error:', e);
         }
-        
+
         // Optionally fetch rewards for the requesting player if steam_id is provided
         const steamId = url.searchParams.get('steam_id');
         let my_rewards = [];
         let permanent_rewards = [];
         let pending_items = [];
         if (steamId) {
-            const rewardStr = await redis.hget(`season:${seasonId}:rewards`, steamId);
-            if (rewardStr) {
-                try { my_rewards.push(JSON.parse(rewardStr)); } catch (e) {}
-            }
-            
-            const globalStr = await redis.hget('globals_hash', `steam:${steamId}`);
-            if (globalStr) {
-                try {
-                    let globalData = typeof globalStr === 'string' ? JSON.parse(globalStr) : globalStr;
-                    if (globalData.permanent_rewards) permanent_rewards = globalData.permanent_rewards;
-                    if (globalData.pending_items) pending_items = globalData.pending_items;
-                } catch(e) {}
-            }
+          const rewardStr = await redis.hget(`season:${seasonId}:rewards`, steamId);
+          if (rewardStr) {
+            try { my_rewards.push(JSON.parse(rewardStr)); } catch (e) { }
+          }
+
+          const globalStr = await redis.hget('globals_hash', `steam:${steamId}`);
+          if (globalStr) {
+            try {
+              let globalData = typeof globalStr === 'string' ? JSON.parse(globalStr) : globalStr;
+              if (globalData.permanent_rewards) permanent_rewards = globalData.permanent_rewards;
+              if (globalData.pending_items) pending_items = globalData.pending_items;
+            } catch (e) { }
+          }
         }
 
         return res.status(200).json({
@@ -189,41 +189,81 @@ export default async function handler(req, res) {
         let currentSeason = currentSeasonStr;
         if (typeof currentSeasonStr === 'string') currentSeason = JSON.parse(currentSeasonStr);
         if (!currentSeason) return res.status(400).json({ error: 'No active season' });
-        
+
         const seasonId = currentSeason.season_id;
-        
+
         // 1. Snapshot globals_hash to season:{id}:snapshot
         if (Object.keys(globals).length > 0) {
-            await redis.hset(`season:${seasonId}:snapshot`, globals);
+          await redis.hset(`season:${seasonId}:snapshot`, globals);
         }
-        
-        // 2. Reset competitive stats in globals_hash
+
+        // --- REWARD DISTRIBUTION ---
+        // Fetch top 3 players from leaderboard
+        const topPlayers = await redis.zrange(`season:${seasonId}:leaderboard`, 0, 2, { rev: true });
+        const rewardMap = {};
+        if (topPlayers && topPlayers.length > 0) {
+          for (let i = 0; i < topPlayers.length; i++) {
+            rewardMap[topPlayers[i]] = i + 1; // 1, 2, 3
+          }
+        }
+
+        // 2. Reset competitive stats and apply rewards in globals_hash
         for (let key in globals) {
           let pStr = globals[key];
           let p = null;
           try { p = JSON.parse(pStr); } catch (e) { }
           if (p) {
-              p.kills = 0;
-              p.deaths = 0;
-              p.assists = 0;
-              p.damage_dealt = 0;
-              p.damage_taken = 0;
-              p.phantom_hits = 0;
-              p.mmr = 1000;
-              p.rank = "Sentinel";
-              if (p.damage_breakdown) {
-                  p.damage_breakdown = { physical: 0, magic: 0, fire: 0, lightning: 0, holy: 0 };
+            // Apply rewards if they are in top 3
+            if (rewardMap[key]) {
+              const placement = rewardMap[key];
+              if (!p.permanent_rewards) p.permanent_rewards = [];
+              if (!p.pending_items) p.pending_items = [];
+
+              let colorHex = "#FFFFFF";
+              if (p.mmr >= 4500) colorHex = "#FF3333";
+              else if (p.mmr >= 4000) colorHex = "#FFD700";
+              else if (p.mmr >= 3500) colorHex = "#9932CC";
+              else if (p.mmr >= 3000) colorHex = "#FF8C00";
+              else if (p.mmr >= 2500) colorHex = "#1E90FF";
+              else if (p.mmr >= 2000) colorHex = "#00FA9A";
+              else if (p.mmr >= 1500) colorHex = "#A9A9A9";
+
+              let rewardObj = { season_id: seasonId, placement: placement, color: colorHex };
+              if (placement === 1) {
+                rewardObj.title = `S${seasonId} Champion`;
+                rewardObj.badgeIcon = "👑"; // Crown Emoji
+                p.pending_items.push({ id: 1075744784, qty: 599 }); // Marika's Rune
+              } else if (placement === 2) {
+                rewardObj.title = `S${seasonId} Top 2`;
+                p.pending_items.push({ id: 1075744784, qty: 300 }); // Marika's Rune
+              } else if (placement === 3) {
+                rewardObj.title = `S${seasonId} Top 3`;
+                p.pending_items.push({ id: 1075744784, qty: 100 }); // Marika's Rune
               }
-              await redis.hset('globals_hash', { [key]: JSON.stringify(p) });
+              p.permanent_rewards.push(rewardObj);
+            }
+
+            p.kills = 0;
+            p.deaths = 0;
+            p.assists = 0;
+            p.damage_dealt = 0;
+            p.damage_taken = 0;
+            p.phantom_hits = 0;
+            p.mmr = 1000;
+            p.rank = "Sentinel";
+            if (p.damage_breakdown) {
+              p.damage_breakdown = { physical: 0, magic: 0, fire: 0, lightning: 0, holy: 0 };
+            }
+            await redis.hset('globals_hash', { [key]: JSON.stringify(p) });
           }
         }
-        
+
         // 3. Advance season
         currentSeason.season_id += 1;
         currentSeason.start_time = Date.now();
         currentSeason.end_time = currentSeason.start_time + (30 * 24 * 60 * 60 * 1000);
         await redis.set('season:current', JSON.stringify(currentSeason));
-        
+
         return res.status(200).json({ success: true, message: `Season ${seasonId} ended, season ${currentSeason.season_id} started.` });
       } catch (e) {
         return res.status(500).json({ error: 'Error ending season' });
@@ -300,9 +340,9 @@ export default async function handler(req, res) {
       }
 
       if (data.is_session_end) p.sessions += 1;
-      
+
       if (data.clear_pending_items) {
-          p.pending_items = [];
+        p.pending_items = [];
       }
 
       p.name = data.name ?? p.name;
@@ -323,14 +363,14 @@ export default async function handler(req, res) {
       try {
         let currentSeasonStr = await redis.get('season:current');
         if (currentSeasonStr) {
-            let currentSeason = typeof currentSeasonStr === 'string' ? JSON.parse(currentSeasonStr) : currentSeasonStr;
-            let seasonId = currentSeason.season_id;
-            if (p.mmr !== undefined && p.mmr !== null) {
-                await redis.zadd(`season:${seasonId}:leaderboard`, { score: p.mmr, member: `steam:${player_id}` });
-            }
+          let currentSeason = typeof currentSeasonStr === 'string' ? JSON.parse(currentSeasonStr) : currentSeasonStr;
+          let seasonId = currentSeason.season_id;
+          if (p.mmr !== undefined && p.mmr !== null) {
+            await redis.zadd(`season:${seasonId}:leaderboard`, { score: p.mmr, member: `steam:${player_id}` });
+          }
         }
-      } catch(e) {
-          console.error("Failed to update season leaderboard", e);
+      } catch (e) {
+        console.error("Failed to update season leaderboard", e);
       }
       // --------------------------------------------
 
