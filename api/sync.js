@@ -55,6 +55,78 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   if (req.method === 'GET') {
+    // Parse URL for query params
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const action = url.searchParams.get('action');
+
+    if (action === 'season') {
+      try {
+        let currentSeason = await redis.get('season:current');
+        if (!currentSeason) {
+          // Initialize season 1 if it doesn't exist
+          const now = new Date();
+          const endDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+          currentSeason = {
+            season_id: 1,
+            start_date: now.toISOString(),
+            end_date: endDate.toISOString(),
+            status: "active"
+          };
+          await redis.set('season:current', JSON.stringify(currentSeason));
+        } else if (typeof currentSeason === 'string') {
+          currentSeason = JSON.parse(currentSeason);
+        }
+        
+        const seasonId = currentSeason.season_id;
+        
+        // Fetch top 10 leaderboard
+        const top10 = await redis.zrevrange(`season:${seasonId}:leaderboard`, 0, 9, { withScores: true });
+        
+        let leaderboard = [];
+        for (let i = 0; i < top10.length; i += 2) {
+            leaderboard.push({
+                steam_id: top10[i],
+                mmr: top10[i+1],
+                placement: (i/2) + 1
+            });
+        }
+        
+        // Optionally fetch rewards for the requesting player if steam_id is provided
+        const steamId = url.searchParams.get('steam_id');
+        let my_rewards = [];
+        if (steamId) {
+            const rewardStr = await redis.hget(`season:${seasonId}:rewards`, steamId);
+            if (rewardStr) {
+                try { my_rewards.push(JSON.parse(rewardStr)); } catch (e) {}
+            }
+        }
+
+        return res.status(200).json({
+          season: currentSeason,
+          leaderboard: leaderboard,
+          my_rewards: my_rewards
+        });
+      } catch (error) {
+        return res.status(500).json({ error: 'Season read error' });
+      }
+    }
+
+    if (action === 'past_season') {
+      const season_id = req.query.season_id;
+      if (!season_id) return res.status(400).json({ error: 'season_id required' });
+      try {
+        const snapshot = await redis.hgetall(`season:${season_id}:snapshot`) || {};
+        for (let key in snapshot) {
+          if (typeof snapshot[key] === 'string') {
+            try { snapshot[key] = JSON.parse(snapshot[key]); } catch (e) { }
+          }
+        }
+        return res.status(200).json(snapshot);
+      } catch (error) {
+        return res.status(500).json({ error: 'Read error' });
+      }
+    }
+
     try {
       const globals = await redis.hgetall('globals_hash') || {};
 
@@ -76,6 +148,55 @@ export default async function handler(req, res) {
 
     if (!clientApiKey || clientApiKey.trim() !== SECRET_API_KEY) {
       return res.status(401).json({ error: 'UNAUTHORIZED', message: '31' });
+    }
+
+    const action = req.query.action;
+    if (action === 'end_season') {
+      try {
+        const globals = await redis.hgetall('globals_hash') || {};
+        const currentSeasonStr = await redis.get('season:current');
+        let currentSeason = currentSeasonStr;
+        if (typeof currentSeasonStr === 'string') currentSeason = JSON.parse(currentSeasonStr);
+        if (!currentSeason) return res.status(400).json({ error: 'No active season' });
+        
+        const seasonId = currentSeason.season_id;
+        
+        // 1. Snapshot globals_hash to season:{id}:snapshot
+        if (Object.keys(globals).length > 0) {
+            await redis.hset(`season:${seasonId}:snapshot`, globals);
+        }
+        
+        // 2. Reset competitive stats in globals_hash
+        for (let key in globals) {
+          let pStr = globals[key];
+          let p = null;
+          try { p = JSON.parse(pStr); } catch (e) { }
+          if (p) {
+              p.kills = 0;
+              p.deaths = 0;
+              p.assists = 0;
+              p.damage_dealt = 0;
+              p.damage_taken = 0;
+              p.phantom_hits = 0;
+              p.mmr = 1000;
+              p.rank = "Sentinel";
+              if (p.damage_breakdown) {
+                  p.damage_breakdown = { physical: 0, magic: 0, fire: 0, lightning: 0, holy: 0 };
+              }
+              await redis.hset('globals_hash', { [key]: JSON.stringify(p) });
+          }
+        }
+        
+        // 3. Advance season
+        currentSeason.season_id += 1;
+        currentSeason.start_time = Date.now();
+        currentSeason.end_time = currentSeason.start_time + (30 * 24 * 60 * 60 * 1000);
+        await redis.set('season:current', JSON.stringify(currentSeason));
+        
+        return res.status(200).json({ success: true, message: `Season ${seasonId} ended, season ${currentSeason.season_id} started.` });
+      } catch (e) {
+        return res.status(500).json({ error: 'Error ending season' });
+      }
     }
 
     let body;
@@ -162,6 +283,21 @@ export default async function handler(req, res) {
           p.rank = data.rank ?? p.rank;
         }
       }
+
+      // --- YENİ: Sezon Leaderboard Güncellemesi ---
+      try {
+        let currentSeasonStr = await redis.get('season:current');
+        if (currentSeasonStr) {
+            let currentSeason = typeof currentSeasonStr === 'string' ? JSON.parse(currentSeasonStr) : currentSeasonStr;
+            let seasonId = currentSeason.season_id;
+            if (p.mmr !== undefined && p.mmr !== null) {
+                await redis.zadd(`season:${seasonId}:leaderboard`, { score: p.mmr, member: player_id });
+            }
+        }
+      } catch(e) {
+          console.error("Failed to update season leaderboard", e);
+      }
+      // --------------------------------------------
 
       p.weapons = data.weapons ?? p.weapons;
       p.armors = data.armors ?? p.armors;
