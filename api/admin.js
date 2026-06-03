@@ -81,10 +81,97 @@ export default async function handler(req, res) {
     }
 
     if (action === 'update_season') {
+      // Only update fields of the CURRENT season (does not create a new one)
       const { data } = payload;
       if (!data) return res.status(400).json({ error: 'Missing data' });
-      await redis.set('season:current', JSON.stringify(data));
-      return res.status(200).json({ success: true });
+      
+      let currentSeasonStr = await redis.get('season:current');
+      let currentSeason = currentSeasonStr ? (typeof currentSeasonStr === 'string' ? JSON.parse(currentSeasonStr) : currentSeasonStr) : {};
+      
+      // Merge updates
+      const updated = { ...currentSeason, ...data };
+      await redis.set('season:current', JSON.stringify(updated));
+      return res.status(200).json({ success: true, season: updated });
+    }
+
+    if (action === 'create_season') {
+      // Create a brand new season. If there's a current one, archive it first.
+      const { season_id, start_date, end_date, status } = payload;
+      if (!season_id || !start_date || !end_date) {
+        return res.status(400).json({ error: 'Missing season_id, start_date, or end_date' });
+      }
+      
+      // Archive current season if exists
+      let currentSeasonStr = await redis.get('season:current');
+      if (currentSeasonStr) {
+        let old = typeof currentSeasonStr === 'string' ? JSON.parse(currentSeasonStr) : currentSeasonStr;
+        // Save old season metadata
+        await redis.set(`season:${old.season_id}:meta`, JSON.stringify({ ...old, status: 'ended' }));
+      }
+      
+      const newSeason = {
+        season_id: parseInt(season_id),
+        start_date: start_date,
+        end_date: end_date,
+        status: status || 'active'
+      };
+      
+      await redis.set('season:current', JSON.stringify(newSeason));
+      return res.status(200).json({ success: true, season: newSeason });
+    }
+
+    if (action === 'end_season') {
+      // End the current season: snapshot globals_hash, archive season meta
+      let currentSeasonStr = await redis.get('season:current');
+      if (!currentSeasonStr) return res.status(400).json({ error: 'No active season to end' });
+      
+      let currentSeason = typeof currentSeasonStr === 'string' ? JSON.parse(currentSeasonStr) : currentSeasonStr;
+      const seasonId = currentSeason.season_id;
+      
+      // 1. Snapshot globals_hash
+      const globals = await redis.hgetall('globals_hash') || {};
+      if (Object.keys(globals).length > 0) {
+        await redis.hset(`season:${seasonId}:snapshot`, globals);
+      }
+      
+      // 2. Archive season meta
+      currentSeason.status = 'ended';
+      currentSeason.ended_at = new Date().toISOString();
+      await redis.set(`season:${seasonId}:meta`, JSON.stringify(currentSeason));
+      
+      // 3. Update current as ended
+      await redis.set('season:current', JSON.stringify(currentSeason));
+      
+      return res.status(200).json({ success: true, message: `Season ${seasonId} ended and archived.` });
+    }
+
+    if (action === 'list_seasons') {
+      // Scan for all season:X:meta keys
+      let seasons = [];
+      
+      // Check current season
+      let currentSeasonStr = await redis.get('season:current');
+      if (currentSeasonStr) {
+        let current = typeof currentSeasonStr === 'string' ? JSON.parse(currentSeasonStr) : currentSeasonStr;
+        current._is_current = true;
+        seasons.push(current);
+      }
+      
+      // Check past seasons (scan up to 50)
+      for (let i = 1; i <= 50; i++) {
+        let metaStr = await redis.get(`season:${i}:meta`);
+        if (metaStr) {
+          let meta = typeof metaStr === 'string' ? JSON.parse(metaStr) : metaStr;
+          // Don't duplicate if it's the same as current
+          if (currentSeasonStr) {
+            let current = typeof currentSeasonStr === 'string' ? JSON.parse(currentSeasonStr) : currentSeasonStr;
+            if (current.season_id === meta.season_id) continue;
+          }
+          seasons.push(meta);
+        }
+      }
+      
+      return res.status(200).json(seasons);
     }
 
     return res.status(400).json({ error: 'Unknown action' });
