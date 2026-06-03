@@ -92,7 +92,7 @@ export default async function handler(req, res) {
         // Fetch top 10 leaderboard
         let leaderboard = [];
         try {
-          const top10 = await redis.zrevrange(`season:${seasonId}:leaderboard`, 0, 9, { withScores: true });
+          const top10 = await redis.zrange(`season:${seasonId}:leaderboard`, 0, 9, { rev: true, withScores: true });
           if (top10 && Array.isArray(top10)) {
             for (let i = 0; i < top10.length; i += 2) {
               let sId = String(top10[i]);
@@ -219,14 +219,18 @@ export default async function handler(req, res) {
               if (!p.permanent_rewards) p.permanent_rewards = [];
               if (!p.pending_items) p.pending_items = [];
 
-              let colorHex = "#FFFFFF";
-              if (p.mmr >= 4500) colorHex = "#FF3333";
-              else if (p.mmr >= 4000) colorHex = "#FFD700";
-              else if (p.mmr >= 3500) colorHex = "#9932CC";
-              else if (p.mmr >= 3000) colorHex = "#FF8C00";
-              else if (p.mmr >= 2500) colorHex = "#1E90FF";
-              else if (p.mmr >= 2000) colorHex = "#00FA9A";
-              else if (p.mmr >= 1500) colorHex = "#A9A9A9";
+              let colorHex = "#738C8C"; // Wretch (0+)
+              if (p.mmr >= 4000) colorHex = "#FF0D0D"; // Top Tier
+              else if (p.mmr >= 3000) colorHex = "#FA0570"; // Veteran
+              else if (p.mmr >= 2600) colorHex = "#E00D99"; // Maestro
+              else if (p.mmr >= 2300) colorHex = "#C714CC"; // Pontiff Demon
+              else if (p.mmr >= 2000) colorHex = "#A61AF2"; // Dreadnought
+              else if (p.mmr >= 1800) colorHex = "#8026FA"; // Slaughter
+              else if (p.mmr >= 1600) colorHex = "#5933FA"; // Sweatlord
+              else if (p.mmr >= 1400) colorHex = "#3359F2"; // Meta Lord
+              else if (p.mmr >= 1200) colorHex = "#4080D9"; // Butcher of PvErs
+              else if (p.mmr >= 1000) colorHex = "#6699BF"; // Sentinel
+              else if (p.mmr >= 800) colorHex = "#99A6B3"; // Underdog
 
               let rewardObj = { season_id: seasonId, placement: placement, color: colorHex };
               if (placement === 1) {
