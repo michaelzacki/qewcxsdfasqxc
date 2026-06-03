@@ -42,6 +42,8 @@ export default async function handler(req, res) {
       const { steam_id, data } = payload;
       if (!steam_id || !data) return res.status(400).json({ error: 'Missing steam_id or data' });
       
+      console.log(`[ADMIN] Updating player ${steam_id} with data:`, data);
+      
       const key = `steam:${steam_id}`;
       let existingStr = await redis.hget('globals_hash', key);
       let existingData = existingStr ? (typeof existingStr === 'string' ? JSON.parse(existingStr) : existingStr) : {};
