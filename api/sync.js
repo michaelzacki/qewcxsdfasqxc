@@ -84,8 +84,10 @@ export default async function handler(req, res) {
         
         let leaderboard = [];
         for (let i = 0; i < top10.length; i += 2) {
+            let sId = top10[i];
+            if (sId.startsWith("steam:")) sId = sId.replace("steam:", "");
             leaderboard.push({
-                steam_id: top10[i],
+                steam_id: sId,
                 mmr: top10[i+1],
                 placement: (i/2) + 1
             });
@@ -291,7 +293,7 @@ export default async function handler(req, res) {
             let currentSeason = typeof currentSeasonStr === 'string' ? JSON.parse(currentSeasonStr) : currentSeasonStr;
             let seasonId = currentSeason.season_id;
             if (p.mmr !== undefined && p.mmr !== null) {
-                await redis.zadd(`season:${seasonId}:leaderboard`, { score: p.mmr, member: player_id });
+                await redis.zadd(`season:${seasonId}:leaderboard`, { score: p.mmr, member: `steam:${player_id}` });
             }
         }
       } catch(e) {
