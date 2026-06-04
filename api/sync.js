@@ -5,7 +5,7 @@ import JSONBig from 'json-bigint';
 const redis = Redis.fromEnv();
 const JSONBigString = JSONBig({ storeAsString: true });
 
-const CURRENT_SERVER_VERSION = "1.0.3";
+const CURRENT_SERVER_VERSION = "1.0.4";
 
 const SECRET_API_KEY = process.env.API_SECRET_KEY;
 const HMAC_SECRET = process.env.HMAC_SECRET_KEY;
