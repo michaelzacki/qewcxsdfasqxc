@@ -55,6 +55,7 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   if (req.method === 'GET') {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     // Parse URL for query params
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const action = url.searchParams.get('action');
