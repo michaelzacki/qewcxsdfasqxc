@@ -298,7 +298,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Invalid JSON body' });
     }
 
-    const { player_id: raw_player_id, data, mod_version, signature } = body;
+    const { player_id: raw_player_id, data, mod_version, signature, season_id } = body;
     const player_id = String(raw_player_id);
 
     if (!player_id) return res.status(400).json({ error: 'player_id needed' });
@@ -343,20 +343,45 @@ export default async function handler(req, res) {
 
       console.log(`[2] after p.last_request_time [SYNC INCOMING] Player: ${data.name} | SteamID: ${player_id} | MMR: ${data.mmr}`);
 
-      p.kills = (p.kills || 0) + (data.kills || 0);
-      p.deaths = (p.deaths || 0) + (data.deaths || 0);
-      p.assists = (p.assists || 0) + (data.assists || 0);
-      p.damage_dealt = (p.damage_dealt || 0) + (data.damage_dealt || 0);
-      p.damage_taken = (p.damage_taken || 0) + (data.damage_taken || 0);
-      p.phantom_hits = (p.phantom_hits || 0) + (data.phantom_hits || 0);
+      // SEASON BOUNDARY CHECK
+      let currentSeasonStr = await redis.get('season:current');
+      let currentSeason = currentSeasonStr ? (typeof currentSeasonStr === 'string' ? JSON.parse(currentSeasonStr) : currentSeasonStr) : null;
+      let isOldSeason = false;
 
-      p.damage_breakdown = p.damage_breakdown || { physical: 0, magic: 0, fire: 0, lightning: 0, holy: 0 };
-      if (data.damage_breakdown) {
-        p.damage_breakdown.physical += (data.damage_breakdown.physical || 0);
-        p.damage_breakdown.magic += (data.damage_breakdown.magic || 0);
-        p.damage_breakdown.fire += (data.damage_breakdown.fire || 0);
-        p.damage_breakdown.lightning += (data.damage_breakdown.lightning || 0);
-        p.damage_breakdown.holy += (data.damage_breakdown.holy || 0);
+      if (currentSeason && season_id !== undefined && parseInt(season_id) !== currentSeason.season_id) {
+         console.log(`[FAILSAFE] Player ${player_id} uploaded stats for OLD season ${season_id}. Server is on ${currentSeason.season_id}. Discarding KDA & MMR.`);
+         isOldSeason = true;
+      }
+
+      if (!isOldSeason) {
+        p.kills = (p.kills || 0) + (data.kills || 0);
+        p.deaths = (p.deaths || 0) + (data.deaths || 0);
+        p.assists = (p.assists || 0) + (data.assists || 0);
+        p.damage_dealt = (p.damage_dealt || 0) + (data.damage_dealt || 0);
+        p.damage_taken = (p.damage_taken || 0) + (data.damage_taken || 0);
+        p.phantom_hits = (p.phantom_hits || 0) + (data.phantom_hits || 0);
+
+        p.damage_breakdown = p.damage_breakdown || { physical: 0, magic: 0, fire: 0, lightning: 0, holy: 0 };
+        if (data.damage_breakdown) {
+          p.damage_breakdown.physical += (data.damage_breakdown.physical || 0);
+          p.damage_breakdown.magic += (data.damage_breakdown.magic || 0);
+          p.damage_breakdown.fire += (data.damage_breakdown.fire || 0);
+          p.damage_breakdown.lightning += (data.damage_breakdown.lightning || 0);
+          p.damage_breakdown.holy += (data.damage_breakdown.holy || 0);
+        }
+
+        if (data.mmr !== undefined) {
+          if (data.mmr === 1000 && p.mmr > 1050) {
+            console.log(`[FAILSAFE] MMR Override Prevented for ${player_id}. Server: ${p.mmr}, Client sent: ${data.mmr}`);
+            // Do not change p.mmr or p.rank
+          } else if (p.mmr !== undefined && Math.abs(data.mmr - p.mmr) > 2000) {
+            console.log(`[FAILSAFE] Massive MMR jump prevented for ${player_id}. Server: ${p.mmr}, Client sent: ${data.mmr}`);
+            // Do not change p.mmr or p.rank
+          } else {
+            p.mmr = data.mmr;
+            p.rank = data.rank ?? p.rank;
+          }
+        }
       }
 
       if (data.is_session_end) p.sessions += 1;
@@ -368,16 +393,6 @@ export default async function handler(req, res) {
       p.name = data.name ?? p.name;
       p.level = data.level ?? p.level;
       p.is_mod_user = data.is_mod_user ?? p.is_mod_user;
-
-      if (data.mmr !== undefined) {
-        if (data.mmr === 1000 && p.mmr > 1050) {
-          console.log(`[FAILSAFE] MMR Override Prevented for ${player_id}. Server: ${p.mmr}, Client sent: ${data.mmr}`);
-          // Do not change p.mmr or p.rank
-        } else {
-          p.mmr = data.mmr;
-          p.rank = data.rank ?? p.rank;
-        }
-      }
 
       // --- YENİ: Sezon Leaderboard Güncellemesi ---
       try {
