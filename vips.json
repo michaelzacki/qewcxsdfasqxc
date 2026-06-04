@@ -56,26 +56,7 @@
   "vips": [
     {
       "steamId": 76561198107770040,
-      "name": "Neodra",
-      "color": [
-        0.0,
-        0.0,
-        1.0,
-        1.0
-      ],
-      "joinSound": "join_redlight.wav",
-      "isRainbow": false,
-      "isBreathing": true,
-      "hasFireParticles": false,
-      "badgeIcon": "",
-      "symbols": [],
-      "borderColor": [
-        0.0,
-        0.0,
-        1.0,
-        1.0
-      ],
-      "hasWavyFlame": false
+      "joinSound": "join_redlight.wav"
     },
     {
       "steamId": 76561198179520425,
