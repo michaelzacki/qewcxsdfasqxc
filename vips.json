@@ -49,7 +49,10 @@
     "symbol_crown.png",
     "symbol_scythe.png",
     "symbol_skull_human.png",
-    "symbol_skull_human2.png"
+    "symbol_skull_human2.png",
+    "death_poison.png",
+    "death_burn.png",
+    "death_frost.png"
   ],
   "vips": [
     {
