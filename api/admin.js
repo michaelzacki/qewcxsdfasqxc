@@ -282,6 +282,65 @@ export default async function handler(req, res) {
       return res.status(200).json(seasons);
     }
 
+    if (action === 'get_bounties') {
+      const bounties = await redis.hgetall('bounties:active') || {};
+      const result = [];
+      for (const [id, val] of Object.entries(bounties)) {
+        let b = typeof val === 'string' ? JSON.parse(val) : val;
+        b.bounty_id = id;
+        result.push(b);
+      }
+      return res.status(200).json(result);
+    }
+
+    if (action === 'create_bounty') {
+      const { data } = payload;
+      if (!data) return res.status(400).json({ error: 'Missing bounty data' });
+
+      // Gerekli verileri ayarla
+      const bountyId = 'bounty_' + Date.now().toString(16) + Math.floor(Math.random()*1000).toString(16);
+      const bounty = {
+        host_name: data.host_name || "Server Target",
+        members: data.members || [],
+        member_steam_ids: data.member_steam_ids || [],
+        mmr_reward: data.mmr_reward || 300,
+        created_at: Date.now(),
+        reporters: ["SERVER_ADMIN"] // Manuel eklenen görev
+      };
+
+      await redis.hset('bounties:active', { [bountyId]: JSON.stringify(bounty) });
+      return res.status(200).json({ success: true, bounty_id: bountyId });
+    }
+
+    if (action === 'delete_bounty') {
+      const { bounty_id } = payload;
+      if (!bounty_id) return res.status(400).json({ error: 'Missing bounty_id' });
+      await redis.hdel('bounties:active', bounty_id);
+      return res.status(200).json({ success: true });
+    }
+
+    if (action === 'set_broadcast') {
+      const { message, duration_seconds, sound } = payload;
+      if (!message) return res.status(400).json({ error: 'Missing message' });
+      
+      const broadcast = {
+        id: 'msg_' + Date.now(),
+        message: message,
+        sound: sound || 'None',
+        created_at: Date.now(),
+        expires_at: Date.now() + (duration_seconds * 1000)
+      };
+      
+      await redis.set('global_broadcast', JSON.stringify(broadcast));
+      return res.status(200).json({ success: true, broadcast });
+    }
+    
+    if (action === 'get_killfeed') {
+      const killsRaw = await redis.lrange('live:killfeed', 0, 49) || [];
+      const kills = killsRaw.map(k => typeof k === 'string' ? JSON.parse(k) : k);
+      return res.status(200).json(kills);
+    }
+
     return res.status(400).json({ error: 'Unknown action' });
   } catch (error) {
     console.error(error);
