@@ -25,6 +25,32 @@ async function getRawBody(req) {
   });
 }
 
+// GLOBAL MEMORY CACHE
+let cachedSeason = null;
+let lastSeasonFetch = 0;
+
+async function getCurrentSeasonCached() {
+  const now = Date.now();
+  if (cachedSeason && (now - lastSeasonFetch < 60000)) {
+    return cachedSeason;
+  }
+  let raw = await redis.get('season:current');
+  let currentSeason = null;
+  if (!raw) {
+    const endDate = new Date(now + 30 * 24 * 60 * 60 * 1000);
+    currentSeason = { season_id: 1, start_date: new Date(now).toISOString(), end_date: endDate.toISOString(), status: "active" };
+    await redis.set('season:current', JSON.stringify(currentSeason));
+  } else if (typeof raw === 'string') {
+    try { currentSeason = JSON.parse(raw); } catch (e) { currentSeason = null; }
+  } else {
+    currentSeason = raw;
+  }
+  cachedSeason = currentSeason;
+  lastSeasonFetch = now;
+  return currentSeason;
+}
+// GLOBAL MEMORY CACHE
+
 function verifySignature(playerId, data, modVersion, clientSig) {
   if (!HMAC_SECRET || !clientSig) return false;
   const canonical = [
@@ -55,33 +81,14 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   if (req.method === 'GET') {
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=59');
     // Parse URL for query params
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const action = url.searchParams.get('action');
 
     if (action === 'season') {
       try {
-        let raw = await redis.get('season:current');
-        console.log('[SEASON] Raw from Redis:', typeof raw, JSON.stringify(raw));
-
-        let currentSeason = null;
-        if (!raw) {
-          // Initialize season 1 if it doesn't exist
-          const now = new Date();
-          const endDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-          currentSeason = {
-            season_id: 1,
-            start_date: now.toISOString(),
-            end_date: endDate.toISOString(),
-            status: "active"
-          };
-          await redis.set('season:current', JSON.stringify(currentSeason));
-        } else if (typeof raw === 'string') {
-          try { currentSeason = JSON.parse(raw); } catch (e) { currentSeason = null; }
-        } else if (typeof raw === 'object') {
-          currentSeason = raw;
-        }
+        let currentSeason = await getCurrentSeasonCached();
 
         if (!currentSeason || !currentSeason.season_id) {
           console.log('[SEASON] Failed to parse season data, raw:', raw);
@@ -186,14 +193,11 @@ export default async function handler(req, res) {
     if (action === 'end_season') {
       try {
         const globals = await redis.hgetall('globals_hash') || {};
-        const currentSeasonStr = await redis.get('season:current');
-        let currentSeason = currentSeasonStr;
-        if (typeof currentSeasonStr === 'string') currentSeason = JSON.parse(currentSeasonStr);
+        let currentSeason = await getCurrentSeasonCached();
         if (!currentSeason) return res.status(400).json({ error: 'No active season' });
 
         const seasonId = currentSeason.season_id;
 
-        // 1. Snapshot globals_hash to season:{id}:snapshot
         const snapshot = {};
         for (let key in globals) {
           let val = globals[key];
@@ -206,8 +210,8 @@ export default async function handler(req, res) {
         if (Object.keys(snapshot).length > 0) {
           await redis.hset(`season:${seasonId}:snapshot`, snapshot);
         }
-
-        // --- REWARD DISTRIBUTION ---
+        
+        // REWARDS
         // Fetch top 3 players from leaderboard
         const topPlayers = await redis.zrange(`season:${seasonId}:leaderboard`, 0, 2, { rev: true });
         const rewardMap = {};
@@ -283,6 +287,8 @@ export default async function handler(req, res) {
         currentSeason.start_time = Date.now();
         currentSeason.end_time = currentSeason.start_time + (30 * 24 * 60 * 60 * 1000);
         await redis.set('season:current', JSON.stringify(currentSeason));
+        cachedSeason = currentSeason;
+        lastSeasonFetch = Date.now();
 
         return res.status(200).json({ success: true, message: `Season ${seasonId} ended, season ${currentSeason.season_id} started.` });
       } catch (e) {
@@ -334,6 +340,15 @@ export default async function handler(req, res) {
         };
       }
 
+      // Track old values to prevent redundant writes
+      const oldMmr = p.mmr || 1000;
+      const oldKills = p.kills || 0;
+      const oldDeaths = p.deaths || 0;
+      const oldAssists = p.assists || 0;
+      const oldDamage = p.damage_dealt || 0;
+      const oldDamageTaken = p.damage_taken || 0;
+      const oldPhantom = p.phantom_hits || 0;
+
       const now = Date.now();
 
       if (p.last_request_time && (now - p.last_request_time < 1500)) {
@@ -344,8 +359,7 @@ export default async function handler(req, res) {
       console.log(`[2] after p.last_request_time [SYNC INCOMING] Player: ${data.name} | SteamID: ${player_id} | MMR: ${data.mmr}`);
 
       // SEASON BOUNDARY CHECK
-      let currentSeasonStr = await redis.get('season:current');
-      let currentSeason = currentSeasonStr ? (typeof currentSeasonStr === 'string' ? JSON.parse(currentSeasonStr) : currentSeasonStr) : null;
+      let currentSeason = await getCurrentSeasonCached();
       let isOldSeason = false;
 
       if (currentSeason && season_id !== undefined && parseInt(season_id) !== currentSeason.season_id) {
@@ -394,28 +408,27 @@ export default async function handler(req, res) {
       p.level = data.level ?? p.level;
       p.is_mod_user = data.is_mod_user ?? p.is_mod_user;
 
-      // --- YENİ: Sezon Leaderboard Güncellemesi ---
       try {
-        let currentSeasonStr = await redis.get('season:current');
-        if (currentSeasonStr) {
-          let currentSeason = typeof currentSeasonStr === 'string' ? JSON.parse(currentSeasonStr) : currentSeasonStr;
+        if (currentSeason) {
           let seasonId = currentSeason.season_id;
-          if (p.mmr !== undefined && p.mmr !== null) {
+          if (p.mmr !== undefined && p.mmr !== null && oldMmr !== p.mmr) {
             await redis.zadd(`season:${seasonId}:leaderboard`, { score: p.mmr, member: `steam:${player_id}` });
           }
         }
       } catch (e) {
         console.error("Failed to update season leaderboard", e);
       }
-      // --------------------------------------------
 
       p.weapons = data.weapons ?? p.weapons;
       p.armors = data.armors ?? p.armors;
       p.talismans = data.talismans ?? p.talismans;
       p.stats = data.stats ?? p.stats;
 
-      await redis.hset('globals_hash', { [`steam:${player_id}`]: JSON.stringify(p) });
-      return res.status(200).json({ success: true });
+      let hasChanges = (data.is_session_end || data.clear_pending_items || p.kills !== oldKills || p.deaths !== oldDeaths || p.assists !== oldAssists || p.damage_dealt !== oldDamage || p.damage_taken !== oldDamageTaken || p.phantom_hits !== oldPhantom || oldMmr !== p.mmr);
+      if (hasChanges) {
+        await redis.hset('globals_hash', { [`steam:${player_id}`]: JSON.stringify(p) });
+      }
+      return res.status(200).json({ success: true, delta_sync: !hasChanges });
     } catch (error) {
       return res.status(500).json({ error: 'Write error' });
     }
