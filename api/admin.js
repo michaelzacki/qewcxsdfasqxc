@@ -328,6 +328,19 @@ export default async function handler(req, res) {
       return res.status(200).json({ success: true });
     }
 
+    if (action === 'manual_bounty_kill') {
+      const { bounty_id, killed_steam_id } = payload;
+      if (!bounty_id || !killed_steam_id) return res.status(400).json({ error: 'Missing fields' });
+      
+      // Simulate adding a kill to the bounty set (like events.js does)
+      await redis.sadd(`bounty:${bounty_id}:kills`, killed_steam_id);
+      await redis.expire(`bounty:${bounty_id}:kills`, 3 * 60 * 60);
+      
+      // If we want to simulate full completion for testing purposes, we could check if all targets are killed
+      // But for testing the UI, just adding it to the set is enough so the C++ client sees it as killed.
+      return res.status(200).json({ success: true });
+    }
+
     if (action === 'set_broadcast') {
       const { title, message, duration_seconds, sound, target_steam_ids } = payload;
       if (!message) return res.status(400).json({ error: 'Missing message' });

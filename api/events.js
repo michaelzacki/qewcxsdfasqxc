@@ -9,6 +9,7 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-api-key');
   
+  // Vercel Edge Cache (10s fresh, 59s stale)
   res.setHeader('Cache-Control', 's-maxage=10, stale-while-revalidate=59');
   
   if (req.method === 'OPTIONS') return res.status(200).end();
@@ -16,6 +17,9 @@ export default async function handler(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const action = url.searchParams.get('action');
 
+  // ====================================================
+  // GET: Return active bounties (clients poll every 30s)
+  // ====================================================
   if (req.method === 'GET' && action === 'get_bounties') {
     try {
       const bounties = await redis.hgetall('bounties:active') || {};
@@ -48,7 +52,10 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Redis error', details: err.message });
     }
   }
-  
+
+  // ====================================================
+  // GET: Admin - Fetch live players
+  // ====================================================
   if (req.method === 'GET' && action === 'get_live_players') {
     try {
        const keys = await redis.keys('live:player:*');
@@ -62,6 +69,9 @@ export default async function handler(req, res) {
     }
   }
 
+  // ====================================================
+  // API key validation for POST requests
+  // ====================================================
   if (req.method === 'POST') {
     const clientApiKey = req.headers['x-api-key'];
     if (!clientApiKey || clientApiKey.trim() !== SECRET_API_KEY) {
@@ -70,6 +80,9 @@ export default async function handler(req, res) {
 
     const body = req.body;
 
+    // ====================================================
+    // POST: Report encounter (invader matched with a host group)
+    // ====================================================
     if (action === 'encounter') {
       const { reporter_steam_id, reporter_name, host_members } = body;
       if (!reporter_steam_id || !host_members || host_members.length < 3)
@@ -101,7 +114,7 @@ export default async function handler(req, res) {
           const hostName = host_members.find(m =>
             m.team_type === 1)?.name || host_members[0].name;
           const bounty = {
-            host_name: hostName,
+            host_name: hostName + "'s Gank",
             members: host_members,
             member_steam_ids: sortedIds,
             mmr_reward: 300,
@@ -131,6 +144,9 @@ export default async function handler(req, res) {
       }
     }
 
+    // ====================================================
+    // POST: Report bounty kill
+    // ====================================================
     if (action === 'bounty_kill') {
       const { bounty_id, killer_steam_id, killed_steam_id, weapon_id } = body;
       if (!bounty_id || !killer_steam_id || !killed_steam_id)
@@ -207,6 +223,9 @@ export default async function handler(req, res) {
       }
     }
     
+    // ====================================================
+    // POST: Live Kill Event (Any kill)
+    // ====================================================
     if (action === 'kill_event') {
       const { killer_name, victim_name, weapon, is_mod_user } = body;
       if (!killer_name || !victim_name) return res.status(400).json({ error: 'Missing killer or victim name' });
@@ -230,7 +249,10 @@ export default async function handler(req, res) {
         return res.status(500).json({ error: 'Redis error', details: err.message });
       }
     }
-    
+
+    // ====================================================
+    // POST: Heartbeat (Save Live Data + Return Bounties)
+    // ====================================================
     if (action === 'heartbeat') {
       const { steam_id, name, map_id, hp, max_hp, fp, max_fp, stamina, max_stamina } = body;
       
