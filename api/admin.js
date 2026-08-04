@@ -91,6 +91,7 @@ export default async function handler(req, res) {
     }
 
     if (action === 'update_season') {
+      // Only update fields of the CURRENT season (does not create a new one)
       const { data } = payload;
       if (!data) return res.status(400).json({ error: 'Missing data' });
 
@@ -104,14 +105,17 @@ export default async function handler(req, res) {
     }
 
     if (action === 'create_season') {
+      // Create a brand new season. If there's a current one, archive it first.
       const { season_id, start_date, end_date, status } = payload;
       if (!season_id || !start_date || !end_date) {
         return res.status(400).json({ error: 'Missing season_id, start_date, or end_date' });
       }
 
+      // Archive current season if exists
       let currentSeasonStr = await redis.get('season:current');
       if (currentSeasonStr) {
         let old = typeof currentSeasonStr === 'string' ? JSON.parse(currentSeasonStr) : currentSeasonStr;
+        // Save old season metadata
         await redis.set(`season:${old.season_id}:meta`, JSON.stringify({ ...old, status: 'ended' }));
       }
 
@@ -150,6 +154,7 @@ export default async function handler(req, res) {
 
       const globals = await redis.hgetall('globals_hash') || {};
 
+      // Fetch top 3 to assign rewards
       let topPlayers = [];
       try {
         const top = await redis.zrange(`season:${seasonId}:leaderboard`, 0, 2, { rev: true });
@@ -170,6 +175,7 @@ export default async function handler(req, res) {
       }
       console.log(`[ADMIN] rewardMap:`, rewardMap);
 
+      // SNAPSHOT FIRST: Save original data before resetting anything
       const snapshot = {};
       for (let key in globals) {
         let val = globals[key];
@@ -256,6 +262,7 @@ export default async function handler(req, res) {
     }
 
     if (action === 'list_seasons') {
+      // Scan for all season:X:meta keys
       let seasons = [];
 
       // Check current season
@@ -305,6 +312,7 @@ export default async function handler(req, res) {
         members: data.members || [],
         member_steam_ids: data.member_steam_ids || [],
         mmr_reward: data.mmr_reward || 300,
+        target_weapon_id: data.target_weapon_id || 0,
         created_at: Date.now(),
         reporters: ["SERVER_ADMIN"] // Manually added task
       };
@@ -321,12 +329,14 @@ export default async function handler(req, res) {
     }
 
     if (action === 'set_broadcast') {
-      const { message, duration_seconds, sound } = payload;
+      const { title, message, duration_seconds, sound, target_steam_ids } = payload;
       if (!message) return res.status(400).json({ error: 'Missing message' });
       
       const broadcast = {
         id: 'msg_' + Date.now(),
+        title: title || 'SERVER BROADCAST',
         message: message,
+        target_steam_ids: target_steam_ids || [],
         sound: sound || 'None',
         created_at: Date.now(),
         expires_at: Date.now() + (duration_seconds * 1000)
