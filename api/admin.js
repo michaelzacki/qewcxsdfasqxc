@@ -24,6 +24,14 @@ export default async function handler(req, res) {
   if (!action) return res.status(400).json({ error: 'No action provided' });
 
   try {
+    if (action === 'get_live_players') {
+      const keys = await redis.keys('live:player:*');
+      if (keys.length === 0) return res.status(200).json([]);
+      const values = await redis.mget(...keys);
+      const players = values.map(v => typeof v === 'string' ? JSON.parse(v) : v);
+      return res.status(200).json(players);
+    }
+
     if (action === 'get_players') {
       const globals = await redis.hgetall('globals_hash') || {};
       const parsedPlayers = [];
@@ -83,7 +91,6 @@ export default async function handler(req, res) {
     }
 
     if (action === 'update_season') {
-      // Only update fields of the CURRENT season (does not create a new one)
       const { data } = payload;
       if (!data) return res.status(400).json({ error: 'Missing data' });
 
@@ -97,17 +104,14 @@ export default async function handler(req, res) {
     }
 
     if (action === 'create_season') {
-      // Create a brand new season. If there's a current one, archive it first.
       const { season_id, start_date, end_date, status } = payload;
       if (!season_id || !start_date || !end_date) {
         return res.status(400).json({ error: 'Missing season_id, start_date, or end_date' });
       }
 
-      // Archive current season if exists
       let currentSeasonStr = await redis.get('season:current');
       if (currentSeasonStr) {
         let old = typeof currentSeasonStr === 'string' ? JSON.parse(currentSeasonStr) : currentSeasonStr;
-        // Save old season metadata
         await redis.set(`season:${old.season_id}:meta`, JSON.stringify({ ...old, status: 'ended' }));
       }
 
@@ -146,7 +150,6 @@ export default async function handler(req, res) {
 
       const globals = await redis.hgetall('globals_hash') || {};
 
-      // Fetch top 3 to assign rewards
       let topPlayers = [];
       try {
         const top = await redis.zrange(`season:${seasonId}:leaderboard`, 0, 2, { rev: true });
@@ -167,7 +170,6 @@ export default async function handler(req, res) {
       }
       console.log(`[ADMIN] rewardMap:`, rewardMap);
 
-      // SNAPSHOT FIRST: Save original data before resetting anything
       const snapshot = {};
       for (let key in globals) {
         let val = globals[key];
@@ -254,7 +256,6 @@ export default async function handler(req, res) {
     }
 
     if (action === 'list_seasons') {
-      // Scan for all season:X:meta keys
       let seasons = [];
 
       // Check current season
@@ -297,7 +298,7 @@ export default async function handler(req, res) {
       const { data } = payload;
       if (!data) return res.status(400).json({ error: 'Missing bounty data' });
 
-      // Gerekli verileri ayarla
+      // Set required data
       const bountyId = 'bounty_' + Date.now().toString(16) + Math.floor(Math.random()*1000).toString(16);
       const bounty = {
         host_name: data.host_name || "Server Target",
@@ -305,7 +306,7 @@ export default async function handler(req, res) {
         member_steam_ids: data.member_steam_ids || [],
         mmr_reward: data.mmr_reward || 300,
         created_at: Date.now(),
-        reporters: ["SERVER_ADMIN"] // Manuel eklenen görev
+        reporters: ["SERVER_ADMIN"] // Manually added task
       };
 
       await redis.hset('bounties:active', { [bountyId]: JSON.stringify(bounty) });
