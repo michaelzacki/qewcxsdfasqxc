@@ -8,8 +8,6 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-api-key');
-  
-  // Vercel Edge Cache (10s fresh, 59s stale)
   res.setHeader('Cache-Control', 's-maxage=10, stale-while-revalidate=59');
   
   if (req.method === 'OPTIONS') return res.status(200).end();
@@ -71,24 +69,32 @@ export default async function handler(req, res) {
 
     const body = req.body;
 
+    // POST: Report encounter (invader matched with a host group)
     if (action === 'encounter') {
       const { reporter_steam_id, reporter_name, host_members } = body;
       if (!reporter_steam_id || !host_members || host_members.length < 3)
         return res.status(400).json({ error: 'Invalid encounter data' });
 
-      // Deterministic group key: ordered SteamID hash
-      const sortedIds = host_members.map(m => m.steam_id).sort();
+      const hostPlayer = host_members.find(m => m.team_type === 1) || host_members[0];
+      const hostSteamId = hostPlayer.steam_id;
       const groupKey = crypto.createHash('md5')
-        .update(sortedIds.join(':')).digest('hex');
+        .update(hostSteamId).digest('hex');
+
+      const sortedIds = host_members.map(m => m.steam_id).sort();
 
       try {
-        // Check if bounty already exists for this exact host group
         const activeBounties = await redis.hgetall('bounties:active') || {};
         for (const [bId, bVal] of Object.entries(activeBounties)) {
           let b = typeof bVal === 'string' ? JSON.parse(bVal) : bVal;
-          if (JSON.stringify(b.member_steam_ids) === JSON.stringify(sortedIds)) {
+
+          const isSameWorld = b.host_steam_id === hostSteamId || 
+                              (!b.host_steam_id && b.member_steam_ids && b.member_steam_ids.includes(hostSteamId));
+          
+          if (isSameWorld) {
              if (!b.reporters.includes(reporter_steam_id)) {
                 b.reporters.push(reporter_steam_id);
+                b.members = host_members;
+                b.member_steam_ids = sortedIds;
                 await redis.hset('bounties:active', { [bId]: JSON.stringify(b) });
              }
              return res.status(200).json({ status: 'bounty_already_exists', bounty_id: bId });
@@ -103,7 +109,9 @@ export default async function handler(req, res) {
           if (Date.now() - existing.first_time > 5 * 60 * 1000) {
             // Old encounter, reset and restart
             const fresh = {
-              host_members, reporters: [reporter_steam_id],
+              host_steam_id: hostSteamId,
+              host_members, 
+              reporters: [reporter_steam_id],
               first_time: Date.now()
             };
             await redis.hset('encounters', { [groupKey]: JSON.stringify(fresh) });
@@ -115,6 +123,7 @@ export default async function handler(req, res) {
           const hostName = host_members.find(m =>
             m.team_type === 1)?.name || host_members[0].name;
           const bounty = {
+            host_steam_id: hostSteamId,
             host_name: hostName + "'s Gank",
             members: host_members,
             member_steam_ids: sortedIds,
@@ -146,7 +155,9 @@ export default async function handler(req, res) {
         } else {
           // Log first encounter
           const encounter = {
-            host_members, reporters: [reporter_steam_id],
+            host_steam_id: hostSteamId,
+            host_members, 
+            reporters: [reporter_steam_id],
             first_time: Date.now()
           };
           await redis.hset('encounters', {
@@ -258,7 +269,6 @@ export default async function handler(req, res) {
         return res.status(500).json({ error: 'Redis error', details: err.message });
       }
     }
-
     if (action === 'heartbeat') {
       const { steam_id, name, map_id, hp, max_hp, fp, max_fp, stamina, max_stamina } = body;
       
