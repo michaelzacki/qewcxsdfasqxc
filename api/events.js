@@ -17,9 +17,6 @@ export default async function handler(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const action = url.searchParams.get('action');
 
-  // ====================================================
-  // GET: Return active bounties (clients poll every 30s)
-  // ====================================================
   if (req.method === 'GET' && action === 'get_bounties') {
     try {
       const bounties = await redis.hgetall('bounties:active') || {};
@@ -53,9 +50,6 @@ export default async function handler(req, res) {
     }
   }
 
-  // ====================================================
-  // GET: Admin - Fetch live players
-  // ====================================================
   if (req.method === 'GET' && action === 'get_live_players') {
     try {
        const keys = await redis.keys('live:player:*');
@@ -69,9 +63,6 @@ export default async function handler(req, res) {
     }
   }
 
-  // ====================================================
-  // API key validation for POST requests
-  // ====================================================
   if (req.method === 'POST') {
     const clientApiKey = req.headers['x-api-key'];
     if (!clientApiKey || clientApiKey.trim() !== SECRET_API_KEY) {
@@ -80,9 +71,6 @@ export default async function handler(req, res) {
 
     const body = req.body;
 
-    // ====================================================
-    // POST: Report encounter (invader matched with a host group)
-    // ====================================================
     if (action === 'encounter') {
       const { reporter_steam_id, reporter_name, host_members } = body;
       if (!reporter_steam_id || !host_members || host_members.length < 3)
@@ -94,6 +82,19 @@ export default async function handler(req, res) {
         .update(sortedIds.join(':')).digest('hex');
 
       try {
+        // Check if bounty already exists for this exact host group
+        const activeBounties = await redis.hgetall('bounties:active') || {};
+        for (const [bId, bVal] of Object.entries(activeBounties)) {
+          let b = typeof bVal === 'string' ? JSON.parse(bVal) : bVal;
+          if (JSON.stringify(b.member_steam_ids) === JSON.stringify(sortedIds)) {
+             if (!b.reporters.includes(reporter_steam_id)) {
+                b.reporters.push(reporter_steam_id);
+                await redis.hset('bounties:active', { [bId]: JSON.stringify(b) });
+             }
+             return res.status(200).json({ status: 'bounty_already_exists', bounty_id: bId });
+          }
+        }
+
         let existing = await redis.hget('encounters', groupKey);
         if (existing) {
           existing = typeof existing === 'string' ? JSON.parse(existing) : existing;
@@ -125,6 +126,20 @@ export default async function handler(req, res) {
             [bountyId]: JSON.stringify(bounty)
           });
           await redis.hdel('encounters', groupKey);
+          
+          /*
+          const broadcast = {
+            id: 'gank_' + bountyId,
+            title: 'GANK DETECTED',
+            message: `Bounty created for ${hostName}! (+300 MMR)`,
+            target_steam_ids: [],
+            sound: 'None',
+            created_at: Date.now(),
+            expires_at: Date.now() + (10 * 1000)
+          };
+          await redis.set('global_broadcast', JSON.stringify(broadcast));
+          */
+
           return res.status(200).json({
             status: 'gank_detected', bounty_id: bountyId
           });
@@ -144,9 +159,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // ====================================================
-    // POST: Report bounty kill
-    // ====================================================
     if (action === 'bounty_kill') {
       const { bounty_id, killer_steam_id, killed_steam_id, weapon_id } = body;
       if (!bounty_id || !killer_steam_id || !killed_steam_id)
@@ -222,10 +234,7 @@ export default async function handler(req, res) {
         return res.status(500).json({ error: 'Redis error', details: err.message });
       }
     }
-    
-    // ====================================================
-    // POST: Live Kill Event (Any kill)
-    // ====================================================
+
     if (action === 'kill_event') {
       const { killer_name, victim_name, weapon, is_mod_user } = body;
       if (!killer_name || !victim_name) return res.status(400).json({ error: 'Missing killer or victim name' });
@@ -250,9 +259,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // ====================================================
-    // POST: Heartbeat (Save Live Data + Return Bounties)
-    // ====================================================
     if (action === 'heartbeat') {
       const { steam_id, name, map_id, hp, max_hp, fp, max_fp, stamina, max_stamina } = body;
       
