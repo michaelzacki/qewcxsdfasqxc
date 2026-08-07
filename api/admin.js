@@ -313,6 +313,7 @@ export default async function handler(req, res) {
         member_steam_ids: data.member_steam_ids || [],
         mmr_reward: data.mmr_reward || 300,
         target_weapon_id: data.target_weapon_id || 0,
+        description: data.description || "",
         created_at: Date.now(),
         reporters: ["SERVER_ADMIN"] // Manually added task
       };
