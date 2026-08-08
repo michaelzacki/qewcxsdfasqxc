@@ -21,12 +21,12 @@ export default async function handler(req, res) {
       const result = [];
       for (const [id, val] of Object.entries(bounties)) {
         let b = typeof val === 'string' ? JSON.parse(val) : val;
-        // Check if 3 hours have passed
+
         if (Date.now() - b.created_at > 3 * 60 * 60 * 1000) {
           await redis.hdel('bounties:active', id);
           continue;
         }
-        // Add kill progress
+
         const kills = await redis.smembers(`bounty:${id}:kills`) || [];
         b.killed_members = kills;
         b.bounty_id = id;
@@ -69,7 +69,6 @@ export default async function handler(req, res) {
 
     const body = req.body;
 
-    // POST: Report encounter (invader matched with a host group)
     if (action === 'encounter') {
       const { reporter_steam_id, reporter_name, host_members } = body;
       if (!reporter_steam_id || !host_members || host_members.length < 3)
@@ -86,7 +85,6 @@ export default async function handler(req, res) {
         const activeBounties = await redis.hgetall('bounties:active') || {};
         for (const [bId, bVal] of Object.entries(activeBounties)) {
           let b = typeof bVal === 'string' ? JSON.parse(bVal) : bVal;
-
           const isSameWorld = b.host_steam_id === hostSteamId || 
                               (!b.host_steam_id && b.member_steam_ids && b.member_steam_ids.includes(hostSteamId));
           
@@ -105,9 +103,7 @@ export default async function handler(req, res) {
         if (existing) {
           existing = typeof existing === 'string' ? JSON.parse(existing) : existing;
 
-          // Check if 5 minutes passed
           if (Date.now() - existing.first_time > 5 * 60 * 1000) {
-            // Old encounter, reset and restart
             const fresh = {
               host_steam_id: hostSteamId,
               host_members, 
@@ -118,7 +114,6 @@ export default async function handler(req, res) {
             return res.status(200).json({ status: 'encounter_reset' });
           }
 
-          // 2nd encounter with the same host -> GANK DETECTED
           const bountyId = 'bounty_' + crypto.randomBytes(6).toString('hex');
           const hostName = host_members.find(m =>
             m.team_type === 1)?.name || host_members[0].name;
@@ -217,12 +212,23 @@ export default async function handler(req, res) {
 
         if (allKilled) {
           // Bounty completed - reward will be given to the killer
-          const mmrReward = bounty.mmr_reward || 300;
+          let mmrReward = bounty.mmr_reward || 300;
+          let slayer_achieved = false;
           
           try {
              let killerStr = await redis.hget('globals_hash', `steam:${killer_steam_id}`);
              if (killerStr) {
                 let killerObj = typeof killerStr === 'string' ? JSON.parse(killerStr) : killerStr;
+                
+                // Track personal Gank Slayer progress
+                killerObj.gank_slayer_progress = (killerObj.gank_slayer_progress || 0) + 1;
+                
+                if (killerObj.gank_slayer_progress >= 3) {
+                    mmrReward += 500; // Add 500 MMR bonus
+                    killerObj.gank_slayer_progress = 0; // Reset progress
+                    slayer_achieved = true;
+                }
+                
                 killerObj.mmr = (killerObj.mmr || 1000) + mmrReward;
                 await redis.hset('globals_hash', { [`steam:${killer_steam_id}`]: JSON.stringify(killerObj) });
              }
@@ -233,6 +239,7 @@ export default async function handler(req, res) {
           return res.status(200).json({
             status: 'bounty_completed',
             mmr_reward: mmrReward,
+            slayer_achieved: slayer_achieved,
             killer_steam_id
           });
         }
@@ -245,7 +252,7 @@ export default async function handler(req, res) {
         return res.status(500).json({ error: 'Redis error', details: err.message });
       }
     }
-
+    
     if (action === 'kill_event') {
       const { killer_name, victim_name, weapon, is_mod_user } = body;
       if (!killer_name || !victim_name) return res.status(400).json({ error: 'Missing killer or victim name' });
@@ -269,9 +276,11 @@ export default async function handler(req, res) {
         return res.status(500).json({ error: 'Redis error', details: err.message });
       }
     }
+
     if (action === 'heartbeat') {
       const { steam_id, name, map_id, hp, max_hp, fp, max_fp, stamina, max_stamina } = body;
       
+      let my_slayer_progress = 0;
       if (steam_id) {
          try {
            const playerData = { 
@@ -281,6 +290,13 @@ export default async function handler(req, res) {
            };
            // Save player data with 30s TTL
            await redis.setex(`live:player:${steam_id}`, 30, JSON.stringify(playerData));
+           
+           // Fetch slayer progress for the heartbeat response
+           const killerStr = await redis.hget('globals_hash', `steam:${steam_id}`);
+           if (killerStr) {
+               const k = typeof killerStr === 'string' ? JSON.parse(killerStr) : killerStr;
+               my_slayer_progress = k.gank_slayer_progress || 0;
+           }
          } catch (e) {
            console.error("Live Tracker redis error:", e);
          }
@@ -309,7 +325,7 @@ export default async function handler(req, res) {
            await redis.del('global_broadcast');
         }
 
-        return res.status(200).json({ bounties: result, broadcast: broadcast, status: 'heartbeat_ok' });
+        return res.status(200).json({ bounties: result, broadcast: broadcast, status: 'heartbeat_ok', slayer_progress: my_slayer_progress });
       } catch (err) {
         return res.status(500).json({ error: 'Redis error during heartbeat', details: err.message });
       }
