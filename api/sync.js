@@ -28,6 +28,8 @@ async function getRawBody(req) {
 // GLOBAL MEMORY CACHE
 let cachedSeason = null;
 let lastSeasonFetch = 0;
+let cachedGlobals = null;
+let lastGlobalsFetch = 0;
 
 async function getCurrentSeasonCached() {
   const now = Date.now();
@@ -167,7 +169,16 @@ export default async function handler(req, res) {
     }
 
     try {
-      const globals = await redis.hgetall('globals_hash') || {};
+      const now = Date.now();
+      let globals;
+      
+      if (cachedGlobals && (now - lastGlobalsFetch < 30000)) {
+          globals = cachedGlobals;
+      } else {
+          globals = await redis.hgetall('globals_hash') || {};
+          cachedGlobals = globals;
+          lastGlobalsFetch = now;
+      }
 
       for (let key in globals) {
         if (typeof globals[key] === 'string') {
@@ -177,9 +188,7 @@ export default async function handler(req, res) {
         }
       }
       return res.status(200).json(globals);
-    } catch (error) {
-      return res.status(500).json({ error: 'Read error' });
-    }
+    } catch (error) { ... }
   }
 
   if (req.method === 'POST') {
@@ -321,6 +330,16 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: 'INVALID_SIGNATURE', message: 'Tampered data rejected.' });
     }
 
+    const isHeartbeatOnly = 
+        (!data.kills) && (!data.deaths) && (!data.assists) && 
+        (!data.damage_dealt) && (!data.damage_taken) && (!data.phantom_hits) && 
+        (data.mmr === undefined) && (!data.is_session_end) && 
+        (!data.clear_pending_items) && (!data.weapons) && (!data.armors);
+
+    if (isHeartbeatOnly) {
+        return res.status(200).json({ success: true, delta_sync: true, note: "heartbeat_bypassed" });
+    }
+    
     console.log(`[1] after sign: [SYNC INCOMING] Player: ${data.name} | SteamID: ${player_id} | MMR: ${data.mmr}`);
 
     try {
