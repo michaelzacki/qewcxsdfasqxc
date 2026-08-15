@@ -4,6 +4,12 @@ import crypto from 'crypto';
 const redis = Redis.fromEnv();
 const SECRET_API_KEY = process.env.API_SECRET_KEY;
 
+// GLOBAL MEMORY CACHE
+let cachedBountiesResult = null;
+let lastBountiesFetch = 0;
+let cachedBroadcast = null;
+let lastBroadcastFetch = 0;
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -304,30 +310,52 @@ export default async function handler(req, res) {
       
       // Return bounties and broadcast data
       try {
-        const bounties = await redis.hgetall('bounties:active') || {};
-        const result = [];
-        for (const [id, val] of Object.entries(bounties)) {
-          let b = typeof val === 'string' ? JSON.parse(val) : val;
-          if (Date.now() - b.created_at > 3 * 60 * 60 * 1000) {
-            await redis.hdel('bounties:active', id);
-            continue;
-          }
-          const kills = await redis.smembers(`bounty:${id}:kills`) || [];
-          b.killed_members = kills;
-          b.bounty_id = id;
-          result.push(b);
-        }
-        
-        let broadcastStr = await redis.get('global_broadcast');
-        let broadcast = broadcastStr ? (typeof broadcastStr === 'string' ? JSON.parse(broadcastStr) : broadcastStr) : null;
-        if (broadcast && broadcast.expires_at && Date.now() > broadcast.expires_at) {
-           broadcast = null;
-           await redis.del('global_broadcast');
+        const now = Date.now();
+        let result = [];
+        let broadcast = null;
+
+        if (cachedBountiesResult && (now - lastBountiesFetch < 15000)) {
+            result = cachedBountiesResult;
+        } else {
+            const bounties = await redis.hgetall('bounties:active') || {};
+            for (const [id, val] of Object.entries(bounties)) {
+              let b = typeof val === 'string' ? JSON.parse(val) : val;
+              if (now - b.created_at > 3 * 60 * 60 * 1000) {
+                await redis.hdel('bounties:active', id);
+                continue;
+              }
+              const kills = await redis.smembers(`bounty:${id}:kills`) || [];
+              b.killed_members = kills;
+              b.bounty_id = id;
+              result.push(b);
+            }
+            cachedBountiesResult = result;
+            lastBountiesFetch = now;
         }
 
-        return res.status(200).json({ bounties: result, broadcast: broadcast, status: 'heartbeat_ok', slayer_progress: my_slayer_progress });
-      } catch (err) {
-        return res.status(500).json({ error: 'Redis error during heartbeat', details: err.message });
+        if (cachedBroadcast !== null && (now - lastBroadcastFetch < 15000)) {
+            broadcast = cachedBroadcast;
+        } else {
+            let broadcastStr = await redis.get('global_broadcast');
+            broadcast = broadcastStr ? (typeof broadcastStr === 'string' ? JSON.parse(broadcastStr) : broadcastStr) : false; // false = yok anlamında cache'lemek için
+            
+            if (broadcast && broadcast.expires_at && now > broadcast.expires_at) {
+               broadcast = false;
+               await redis.del('global_broadcast');
+            }
+            cachedBroadcast = broadcast;
+            lastBroadcastFetch = now;
+        }
+        const finalBroadcast = broadcast === false ? null : broadcast;
+
+        return res.status(200).json({ 
+            bounties: result, 
+            broadcast: finalBroadcast, 
+            status: 'heartbeat_ok', 
+            slayer_progress: my_slayer_progress 
+        });
+      } catch (err) { 
+        return res.status(500).json({ error: 'Redis error during heartbeat', details: err.message }); 
       }
     }
   }
