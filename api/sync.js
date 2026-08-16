@@ -31,6 +31,8 @@ let lastSeasonFetch = 0;
 let cachedGlobals = null;
 let lastGlobalsFetch = 0;
 
+const playerLastSync = new Map();
+
 async function getCurrentSeasonCached() {
   const now = Date.now();
   if (cachedSeason && (now - lastSeasonFetch < 60000)) {
@@ -51,7 +53,6 @@ async function getCurrentSeasonCached() {
   lastSeasonFetch = now;
   return currentSeason;
 }
-// GLOBAL MEMORY CACHE
 
 function verifySignature(playerId, data, modVersion, clientSig) {
   if (!HMAC_SECRET || !clientSig) return false;
@@ -84,7 +85,6 @@ export default async function handler(req, res) {
 
   if (req.method === 'GET') {
     res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=59');
-    // Parse URL for query params
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const action = url.searchParams.get('action');
 
@@ -93,8 +93,7 @@ export default async function handler(req, res) {
         let currentSeason = await getCurrentSeasonCached();
 
         if (!currentSeason || !currentSeason.season_id) {
-          console.log('[SEASON] Failed to parse season data, raw:', raw);
-          return res.status(500).json({ error: 'Season data corrupted', raw_type: typeof raw, raw: String(raw).substring(0, 200) });
+          return res.status(500).json({ error: 'Season data corrupted' });
         }
 
         const seasonId = currentSeason.season_id;
@@ -118,7 +117,6 @@ export default async function handler(req, res) {
           console.error('[SEASON] Leaderboard fetch error:', e);
         }
 
-        // Optionally fetch rewards for the requesting player if steam_id is provided
         const steamId = url.searchParams.get('steam_id');
         let my_rewards = [];
         let permanent_rewards = [];
@@ -188,7 +186,9 @@ export default async function handler(req, res) {
         }
       }
       return res.status(200).json(globals);
-    } catch (error) { ... }
+    } catch (error) { 
+      return res.status(500).json({ error: 'Read error' });
+    }
   }
 
   if (req.method === 'POST') {
@@ -221,7 +221,6 @@ export default async function handler(req, res) {
         }
         
         // REWARDS
-        // Fetch top 3 players from leaderboard
         const topPlayers = await redis.zrange(`season:${seasonId}:leaderboard`, 0, 2, { rev: true });
         const rewardMap = {};
         if (topPlayers && topPlayers.length > 0) {
@@ -230,7 +229,7 @@ export default async function handler(req, res) {
           }
         }
 
-        // 2. Reset competitive stats and apply rewards in globals_hash
+        // Reset competitive stats and apply rewards
         for (let key in globals) {
           let pStr = globals[key];
           let p = null;
@@ -242,7 +241,6 @@ export default async function handler(req, res) {
             }
           } catch (e) { }
           if (p) {
-            // Apply rewards if they are in top 3
             if (rewardMap[key]) {
               const placement = rewardMap[key];
               if (!p.permanent_rewards) p.permanent_rewards = [];
@@ -265,13 +263,13 @@ export default async function handler(req, res) {
               if (placement === 1) {
                 rewardObj.title = `S${seasonId} Champion`;
                 rewardObj.badgeIcon = "symbol_crown.png";
-                p.pending_items.push({ id: 1075744784, qty: 599 }); // Marika's Rune
+                p.pending_items.push({ id: 1075744784, qty: 599 });
               } else if (placement === 2) {
                 rewardObj.title = `S${seasonId} Top 2`;
-                p.pending_items.push({ id: 1075744784, qty: 300 }); // Marika's Rune
+                p.pending_items.push({ id: 1075744784, qty: 300 });
               } else if (placement === 3) {
                 rewardObj.title = `S${seasonId} Top 3`;
-                p.pending_items.push({ id: 1075744784, qty: 100 }); // Marika's Rune
+                p.pending_items.push({ id: 1075744784, qty: 100 });
               }
               p.permanent_rewards.push(rewardObj);
             }
@@ -291,7 +289,7 @@ export default async function handler(req, res) {
           }
         }
 
-        // 3. Advance season
+        // Advance season
         currentSeason.season_id += 1;
         currentSeason.start_time = Date.now();
         currentSeason.end_time = currentSeason.start_time + (30 * 24 * 60 * 60 * 1000);
@@ -330,15 +328,20 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: 'INVALID_SIGNATURE', message: 'Tampered data rejected.' });
     }
 
+    const nowTime = Date.now();
+    const lastSync = playerLastSync.get(player_id) || 0;
+
     const isHeartbeatOnly = 
         (!data.kills) && (!data.deaths) && (!data.assists) && 
         (!data.damage_dealt) && (!data.damage_taken) && (!data.phantom_hits) && 
         (data.mmr === undefined) && (!data.is_session_end) && 
         (!data.clear_pending_items) && (!data.weapons) && (!data.armors);
 
-    if (isHeartbeatOnly) {
+    if (isHeartbeatOnly && (nowTime - lastSync < 60000)) {
         return res.status(200).json({ success: true, delta_sync: true, note: "heartbeat_bypassed" });
     }
+
+    playerLastSync.set(player_id, nowTime);
     
     console.log(`[1] after sign: [SYNC INCOMING] Player: ${data.name} | SteamID: ${player_id} | MMR: ${data.mmr}`);
 
@@ -359,7 +362,6 @@ export default async function handler(req, res) {
         };
       }
 
-      // Track old values to prevent redundant writes
       const oldMmr = p.mmr || 1000;
       const oldKills = p.kills || 0;
       const oldDeaths = p.deaths || 0;
@@ -367,15 +369,8 @@ export default async function handler(req, res) {
       const oldDamage = p.damage_dealt || 0;
       const oldDamageTaken = p.damage_taken || 0;
       const oldPhantom = p.phantom_hits || 0;
-
-      const now = Date.now();
-
-      if (p.last_request_time && (now - p.last_request_time < 1500)) {
-        return res.status(429).json({ error: 'TOO_MANY_REQUESTS', message: 'Too many requests.' });
-      }
-      p.last_request_time = now;
-
-      console.log(`[2] after p.last_request_time [SYNC INCOMING] Player: ${data.name} | SteamID: ${player_id} | MMR: ${data.mmr}`);
+    
+      p.last_request_time = nowTime;
 
       // SEASON BOUNDARY CHECK
       let currentSeason = await getCurrentSeasonCached();
@@ -406,10 +401,8 @@ export default async function handler(req, res) {
         if (data.mmr !== undefined) {
           if (data.mmr === 1000 && p.mmr > 1050) {
             console.log(`[FAILSAFE] MMR Override Prevented for ${player_id}. Server: ${p.mmr}, Client sent: ${data.mmr}`);
-            // Do not change p.mmr or p.rank
           } else if (p.mmr !== undefined && Math.abs(data.mmr - p.mmr) > 2000) {
             console.log(`[FAILSAFE] Massive MMR jump prevented for ${player_id}. Server: ${p.mmr}, Client sent: ${data.mmr}`);
-            // Do not change p.mmr or p.rank
           } else {
             p.mmr = data.mmr;
             p.rank = data.rank ?? p.rank;
@@ -443,11 +436,11 @@ export default async function handler(req, res) {
       p.talismans = data.talismans ?? p.talismans;
       p.stats = data.stats ?? p.stats;
 
-      let hasChanges = (data.is_session_end || data.clear_pending_items || p.kills !== oldKills || p.deaths !== oldDeaths || p.assists !== oldAssists || p.damage_dealt !== oldDamage || p.damage_taken !== oldDamageTaken || p.phantom_hits !== oldPhantom || oldMmr !== p.mmr);
-      if (hasChanges) {
-        await redis.hset('globals_hash', { [`steam:${player_id}`]: JSON.stringify(p) });
-      }
-      return res.status(200).json({ success: true, delta_sync: !hasChanges });
+      await redis.hset('globals_hash', { [`steam:${player_id}`]: JSON.stringify(p) });
+      
+      let hasStatChanges = (data.is_session_end || data.clear_pending_items || p.kills !== oldKills || p.deaths !== oldDeaths || p.assists !== oldAssists || p.damage_dealt !== oldDamage || p.damage_taken !== oldDamageTaken || p.phantom_hits !== oldPhantom || oldMmr !== p.mmr);
+
+      return res.status(200).json({ success: true, delta_sync: !hasStatChanges });
     } catch (error) {
       return res.status(500).json({ error: 'Write error' });
     }
