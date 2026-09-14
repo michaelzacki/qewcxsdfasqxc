@@ -1,12 +1,11 @@
-import { Redis } from '@upstash/redis';
+import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
 import JSONBig from 'json-bigint';
 
-const redis = Redis.fromEnv();
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 const JSONBigString = JSONBig({ storeAsString: true });
 
-const CURRENT_SERVER_VERSION = "1.1.0";
-
+const CURRENT_SERVER_VERSION = "1.0.4";
 const SECRET_API_KEY = process.env.API_SECRET_KEY;
 const HMAC_SECRET = process.env.HMAC_SECRET_KEY;
 
@@ -25,34 +24,29 @@ async function getRawBody(req) {
   });
 }
 
-// GLOBAL MEMORY CACHE
+// --- GLOBAL MEMORY CACHE ---
 let cachedSeason = null;
 let lastSeasonFetch = 0;
-let cachedGlobals = null;
-let lastGlobalsFetch = 0;
-
-const playerLastSync = new Map();
 
 async function getCurrentSeasonCached() {
   const now = Date.now();
   if (cachedSeason && (now - lastSeasonFetch < 60000)) {
     return cachedSeason;
   }
-  let raw = await redis.get('season:current');
+  const { data, error } = await supabase.from('seasons').select('*').eq('status', 'active').order('season_id', { ascending: false }).limit(1).single();
   let currentSeason = null;
-  if (!raw) {
+  if (!data || error) {
     const endDate = new Date(now + 30 * 24 * 60 * 60 * 1000);
-    currentSeason = { season_id: 1, start_date: new Date(now).toISOString(), end_date: endDate.toISOString(), status: "active" };
-    await redis.set('season:current', JSON.stringify(currentSeason));
-  } else if (typeof raw === 'string') {
-    try { currentSeason = JSON.parse(raw); } catch (e) { currentSeason = null; }
+    currentSeason = { season_id: 1, start_time: now, end_time: endDate.getTime(), status: "active" };
+    await supabase.from('seasons').insert(currentSeason);
   } else {
-    currentSeason = raw;
+    currentSeason = data;
   }
   cachedSeason = currentSeason;
   lastSeasonFetch = now;
   return currentSeason;
 }
+// ---------------------------
 
 function verifySignature(playerId, data, modVersion, clientSig) {
   if (!HMAC_SECRET || !clientSig) return false;
@@ -91,49 +85,33 @@ export default async function handler(req, res) {
     if (action === 'season') {
       try {
         let currentSeason = await getCurrentSeasonCached();
-
-        if (!currentSeason || !currentSeason.season_id) {
-          return res.status(500).json({ error: 'Season data corrupted' });
-        }
-
-        const seasonId = currentSeason.season_id;
+        const steamId = url.searchParams.get('steam_id');
 
         // Fetch top 10 leaderboard
+        const { data: topPlayers, error: lbError } = await supabase
+          .from('players')
+          .select('steam_id, mmr, name')
+          .order('mmr', { ascending: false })
+          .limit(10);
+          
         let leaderboard = [];
-        try {
-          const top10 = await redis.zrange(`season:${seasonId}:leaderboard`, 0, 9, { rev: true, withScores: true });
-          if (top10 && Array.isArray(top10)) {
-            for (let i = 0; i < top10.length; i += 2) {
-              let sId = String(top10[i]);
-              if (sId.startsWith("steam:")) sId = sId.replace("steam:", "");
-              leaderboard.push({
-                steam_id: sId,
-                mmr: parseInt(top10[i + 1]) || 0,
-                placement: (i / 2) + 1
-              });
-            }
-          }
-        } catch (e) {
-          console.error('[SEASON] Leaderboard fetch error:', e);
+        if (topPlayers && !lbError) {
+          leaderboard = topPlayers.map((p, index) => ({
+             steam_id: p.steam_id,
+             mmr: p.mmr || 0,
+             placement: index + 1
+          }));
         }
 
-        const steamId = url.searchParams.get('steam_id');
         let my_rewards = [];
         let permanent_rewards = [];
         let pending_items = [];
+        
         if (steamId) {
-          const rewardStr = await redis.hget(`season:${seasonId}:rewards`, steamId);
-          if (rewardStr) {
-            try { my_rewards.push(JSON.parse(rewardStr)); } catch (e) { }
-          }
-
-          const globalStr = await redis.hget('globals_hash', `steam:${steamId}`);
-          if (globalStr) {
-            try {
-              let globalData = typeof globalStr === 'string' ? JSON.parse(globalStr) : globalStr;
-              if (globalData.permanent_rewards) permanent_rewards = globalData.permanent_rewards;
-              if (globalData.pending_items) pending_items = globalData.pending_items;
-            } catch (e) { }
+          const { data: myData } = await supabase.from('players').select('permanent_rewards, pending_items').eq('steam_id', steamId).single();
+          if (myData) {
+            permanent_rewards = myData.permanent_rewards || [];
+            pending_items = myData.pending_items || [];
           }
         }
 
@@ -151,42 +129,17 @@ export default async function handler(req, res) {
     }
 
     if (action === 'past_season') {
-      const season_id = req.query.season_id;
-      if (!season_id) return res.status(400).json({ error: 'season_id required' });
-      try {
-        const snapshot = await redis.hgetall(`season:${season_id}:snapshot`) || {};
-        for (let key in snapshot) {
-          if (typeof snapshot[key] === 'string') {
-            try { snapshot[key] = JSON.parse(snapshot[key]); } catch (e) { }
-          }
-        }
-        return res.status(200).json(snapshot);
-      } catch (error) {
-        return res.status(500).json({ error: 'Read error' });
-      }
+      // Past seasons aren't explicitly saved as snapshots in Supabase right now.
+      return res.status(200).json({});
     }
 
     try {
-      const now = Date.now();
-      let globals;
-      
-      if (cachedGlobals && (now - lastGlobalsFetch < 30000)) {
-          globals = cachedGlobals;
-      } else {
-          globals = await redis.hgetall('globals_hash') || {};
-          cachedGlobals = globals;
-          lastGlobalsFetch = now;
-      }
-
-      for (let key in globals) {
-        if (typeof globals[key] === 'string') {
-          try {
-            globals[key] = JSON.parse(globals[key]);
-          } catch (e) { }
-        }
-      }
+      const { data: players, error } = await supabase.from('players').select('*');
+      if (error) throw error;
+      const globals = {};
+      players.forEach(p => { globals[`steam:${p.steam_id}`] = p; });
       return res.status(200).json(globals);
-    } catch (error) { 
+    } catch (error) {
       return res.status(500).json({ error: 'Read error' });
     }
   }
@@ -200,107 +153,7 @@ export default async function handler(req, res) {
 
     const action = req.query.action;
     if (action === 'end_season') {
-      try {
-        const globals = await redis.hgetall('globals_hash') || {};
-        let currentSeason = await getCurrentSeasonCached();
-        if (!currentSeason) return res.status(400).json({ error: 'No active season' });
-
-        const seasonId = currentSeason.season_id;
-
-        const snapshot = {};
-        for (let key in globals) {
-          let val = globals[key];
-          if (typeof val === 'object' && val !== null) {
-            snapshot[key] = JSON.stringify(val);
-          } else {
-            snapshot[key] = val;
-          }
-        }
-        if (Object.keys(snapshot).length > 0) {
-          await redis.hset(`season:${seasonId}:snapshot`, snapshot);
-        }
-        
-        // REWARDS
-        const topPlayers = await redis.zrange(`season:${seasonId}:leaderboard`, 0, 2, { rev: true });
-        const rewardMap = {};
-        if (topPlayers && topPlayers.length > 0) {
-          for (let i = 0; i < topPlayers.length; i++) {
-            rewardMap[topPlayers[i]] = i + 1; // 1, 2, 3
-          }
-        }
-
-        // Reset competitive stats and apply rewards
-        for (let key in globals) {
-          let pStr = globals[key];
-          let p = null;
-          try {
-            if (typeof pStr === 'string') {
-              p = JSON.parse(pStr);
-            } else if (typeof pStr === 'object' && pStr !== null) {
-              p = pStr;
-            }
-          } catch (e) { }
-          if (p) {
-            if (rewardMap[key]) {
-              const placement = rewardMap[key];
-              if (!p.permanent_rewards) p.permanent_rewards = [];
-              if (!p.pending_items) p.pending_items = [];
-
-              let colorHex = "#738C8C"; // Wretch (0+)
-              if (p.mmr >= 4000) colorHex = "#FF0D0D"; // Top Tier
-              else if (p.mmr >= 3000) colorHex = "#FA0570"; // Veteran
-              else if (p.mmr >= 2600) colorHex = "#E00D99"; // Maestro
-              else if (p.mmr >= 2300) colorHex = "#C714CC"; // Pontiff Demon
-              else if (p.mmr >= 2000) colorHex = "#A61AF2"; // Dreadnought
-              else if (p.mmr >= 1800) colorHex = "#8026FA"; // Slaughter
-              else if (p.mmr >= 1600) colorHex = "#5933FA"; // Sweatlord
-              else if (p.mmr >= 1400) colorHex = "#3359F2"; // Meta Lord
-              else if (p.mmr >= 1200) colorHex = "#4080D9"; // Butcher of PvErs
-              else if (p.mmr >= 1000) colorHex = "#6699BF"; // Sentinel
-              else if (p.mmr >= 800) colorHex = "#99A6B3"; // Underdog
-
-              let rewardObj = { season_id: seasonId, placement: placement, color: colorHex };
-              if (placement === 1) {
-                rewardObj.title = `S${seasonId} Champion`;
-                rewardObj.badgeIcon = "symbol_crown.png";
-                p.pending_items.push({ id: 1075744784, qty: 599 });
-              } else if (placement === 2) {
-                rewardObj.title = `S${seasonId} Top 2`;
-                p.pending_items.push({ id: 1075744784, qty: 300 });
-              } else if (placement === 3) {
-                rewardObj.title = `S${seasonId} Top 3`;
-                p.pending_items.push({ id: 1075744784, qty: 100 });
-              }
-              p.permanent_rewards.push(rewardObj);
-            }
-
-            p.kills = 0;
-            p.deaths = 0;
-            p.assists = 0;
-            p.damage_dealt = 0;
-            p.damage_taken = 0;
-            p.phantom_hits = 0;
-            p.mmr = 1000;
-            p.rank = "Sentinel";
-            if (p.damage_breakdown) {
-              p.damage_breakdown = { physical: 0, magic: 0, fire: 0, lightning: 0, holy: 0 };
-            }
-            await redis.hset('globals_hash', { [key]: JSON.stringify(p) });
-          }
-        }
-
-        // Advance season
-        currentSeason.season_id += 1;
-        currentSeason.start_time = Date.now();
-        currentSeason.end_time = currentSeason.start_time + (30 * 24 * 60 * 60 * 1000);
-        await redis.set('season:current', JSON.stringify(currentSeason));
-        cachedSeason = currentSeason;
-        lastSeasonFetch = Date.now();
-
-        return res.status(200).json({ success: true, message: `Season ${seasonId} ended, season ${currentSeason.season_id} started.` });
-      } catch (e) {
-        return res.status(500).json({ error: 'Error ending season' });
-      }
+      return res.status(410).json({ error: 'DISABLED', message: 'Season end rewards have been disabled.' });
     }
 
     let body;
@@ -317,50 +170,29 @@ export default async function handler(req, res) {
     if (!player_id) return res.status(400).json({ error: 'player_id needed' });
 
     if (!mod_version || mod_version !== CURRENT_SERVER_VERSION) {
-      return res.status(403).json({
-        error: 'OUTDATED_CLIENT',
-        message: `Force update required.`
-      });
+      return res.status(403).json({ error: 'OUTDATED_CLIENT', message: `Force update required.` });
     }
 
-    // HMAC-SHA256 Anti-Tamper Verification
     if (!verifySignature(player_id, data, mod_version, signature)) {
       return res.status(403).json({ error: 'INVALID_SIGNATURE', message: 'Tampered data rejected.' });
     }
 
-    const nowTime = Date.now();
-    const lastSync = playerLastSync.get(player_id) || 0;
-
-    const isHeartbeatOnly = 
-        (!data.kills) && (!data.deaths) && (!data.assists) && 
-        (!data.damage_dealt) && (!data.damage_taken) && (!data.phantom_hits) && 
-        (data.mmr === undefined) && (!data.is_session_end) && 
-        (!data.clear_pending_items) && (!data.weapons) && (!data.armors);
-
-    if (isHeartbeatOnly && (nowTime - lastSync < 60000)) {
-        return res.status(200).json({ success: true, delta_sync: true, note: "heartbeat_bypassed" });
-    }
-
-    playerLastSync.set(player_id, nowTime);
-    
-    console.log(`[1] after sign: [SYNC INCOMING] Player: ${data.name} | SteamID: ${player_id} | MMR: ${data.mmr}`);
-
     try {
-      let pStr = await redis.hget('globals_hash', `steam:${player_id}`);
-      let p = null;
-      if (typeof pStr === 'string') {
-        try { p = JSON.parse(pStr); } catch (e) { }
-      } else {
-        p = pStr;
-      }
+      // 1. Fetch current player data
+      const { data: pData } = await supabase.from('players').select('*').eq('steam_id', player_id).single();
+      let p = pData || {
+        steam_id: player_id, kills: 0, deaths: 0, assists: 0, damage_dealt: 0, damage_taken: 0, sessions: 0,
+        phantom_hits: 0, name: data.name || "Unknown", mmr: 1000, rank: "Sentinel", last_request_time: 0,
+        damage_breakdown: { physical: 0, magic: 0, fire: 0, lightning: 0, holy: 0 }
+      };
 
-      if (!p || typeof p !== 'object') {
-        p = {
-          kills: 0, deaths: 0, assists: 0, damage_dealt: 0, damage_taken: 0, sessions: 0,
-          phantom_hits: 0, name: data.name || "Unknown", mmr: 1000, rank: "Sentinel",
-          last_request_time: 0
-        };
-      }
+      // AUTO-REPAIR
+      if (p.kills < 0) p.kills = 0;
+      if (p.deaths < 0) p.deaths = 0;
+      if (p.assists < 0) p.assists = 0;
+      if (p.damage_dealt < 0) p.damage_dealt = 0;
+      if (p.damage_taken < 0) p.damage_taken = 0;
+      if (p.phantom_hits < 0) p.phantom_hits = 0;
 
       const oldMmr = p.mmr || 1000;
       const oldKills = p.kills || 0;
@@ -369,40 +201,49 @@ export default async function handler(req, res) {
       const oldDamage = p.damage_dealt || 0;
       const oldDamageTaken = p.damage_taken || 0;
       const oldPhantom = p.phantom_hits || 0;
-    
-      p.last_request_time = nowTime;
 
-      // SEASON BOUNDARY CHECK
+      const now = Date.now();
+      if (p.last_request_time && (now - p.last_request_time < 1500)) {
+        return res.status(429).json({ error: 'TOO_MANY_REQUESTS', message: 'Too many requests.' });
+      }
+      p.last_request_time = now;
+
       let currentSeason = await getCurrentSeasonCached();
       let isOldSeason = false;
 
       if (currentSeason && season_id !== undefined && parseInt(season_id) !== currentSeason.season_id) {
-         console.log(`[FAILSAFE] Player ${player_id} uploaded stats for OLD season ${season_id}. Server is on ${currentSeason.season_id}. Discarding KDA & MMR.`);
          isOldSeason = true;
       }
 
       if (!isOldSeason) {
-        p.kills = (p.kills || 0) + (data.kills || 0);
-        p.deaths = (p.deaths || 0) + (data.deaths || 0);
-        p.assists = (p.assists || 0) + (data.assists || 0);
-        p.damage_dealt = (p.damage_dealt || 0) + (data.damage_dealt || 0);
-        p.damage_taken = (p.damage_taken || 0) + (data.damage_taken || 0);
-        p.phantom_hits = (p.phantom_hits || 0) + (data.phantom_hits || 0);
+        const safeKills = Math.max(data.kills || 0, 0);
+        const safeDeaths = Math.max(data.deaths || 0, 0);
+        const safeAssists = Math.max(data.assists || 0, 0);
+        const safeDmgDealt = Math.max(data.damage_dealt || 0, 0);
+        const safeDmgTaken = Math.max(data.damage_taken || 0, 0);
+        const safePhantom = Math.max(data.phantom_hits || 0, 0);
+
+        p.kills += safeKills;
+        p.deaths += safeDeaths;
+        p.assists += safeAssists;
+        p.damage_dealt += safeDmgDealt;
+        p.damage_taken += safeDmgTaken;
+        p.phantom_hits += safePhantom;
 
         p.damage_breakdown = p.damage_breakdown || { physical: 0, magic: 0, fire: 0, lightning: 0, holy: 0 };
         if (data.damage_breakdown) {
-          p.damage_breakdown.physical += (data.damage_breakdown.physical || 0);
-          p.damage_breakdown.magic += (data.damage_breakdown.magic || 0);
-          p.damage_breakdown.fire += (data.damage_breakdown.fire || 0);
-          p.damage_breakdown.lightning += (data.damage_breakdown.lightning || 0);
-          p.damage_breakdown.holy += (data.damage_breakdown.holy || 0);
+          p.damage_breakdown.physical += Math.max(data.damage_breakdown.physical || 0, 0);
+          p.damage_breakdown.magic += Math.max(data.damage_breakdown.magic || 0, 0);
+          p.damage_breakdown.fire += Math.max(data.damage_breakdown.fire || 0, 0);
+          p.damage_breakdown.lightning += Math.max(data.damage_breakdown.lightning || 0, 0);
+          p.damage_breakdown.holy += Math.max(data.damage_breakdown.holy || 0, 0);
         }
 
         if (data.mmr !== undefined) {
           if (data.mmr === 1000 && p.mmr > 1050) {
-            console.log(`[FAILSAFE] MMR Override Prevented for ${player_id}. Server: ${p.mmr}, Client sent: ${data.mmr}`);
+            // Prevent override
           } else if (p.mmr !== undefined && Math.abs(data.mmr - p.mmr) > 2000) {
-            console.log(`[FAILSAFE] Massive MMR jump prevented for ${player_id}. Server: ${p.mmr}, Client sent: ${data.mmr}`);
+            // Prevent massive jump
           } else {
             p.mmr = data.mmr;
             p.rank = data.rank ?? p.rank;
@@ -411,37 +252,23 @@ export default async function handler(req, res) {
       }
 
       if (data.is_session_end) p.sessions += 1;
-
-      if (data.clear_pending_items) {
-        p.pending_items = [];
-      }
-
+      if (data.clear_pending_items) p.pending_items = [];
       p.name = data.name ?? p.name;
       p.level = data.level ?? p.level;
       p.is_mod_user = data.is_mod_user ?? p.is_mod_user;
-
-      try {
-        if (currentSeason) {
-          let seasonId = currentSeason.season_id;
-          if (p.mmr !== undefined && p.mmr !== null && oldMmr !== p.mmr) {
-            await redis.zadd(`season:${seasonId}:leaderboard`, { score: p.mmr, member: `steam:${player_id}` });
-          }
-        }
-      } catch (e) {
-        console.error("Failed to update season leaderboard", e);
-      }
-
       p.weapons = data.weapons ?? p.weapons;
       p.armors = data.armors ?? p.armors;
       p.talismans = data.talismans ?? p.talismans;
       p.stats = data.stats ?? p.stats;
 
-      await redis.hset('globals_hash', { [`steam:${player_id}`]: JSON.stringify(p) });
+      let hasChanges = (data.is_session_end || data.clear_pending_items || p.kills !== oldKills || p.deaths !== oldDeaths || p.assists !== oldAssists || p.damage_dealt !== oldDamage || p.damage_taken !== oldDamageTaken || p.phantom_hits !== oldPhantom || oldMmr !== p.mmr);
       
-      let hasStatChanges = (data.is_session_end || data.clear_pending_items || p.kills !== oldKills || p.deaths !== oldDeaths || p.assists !== oldAssists || p.damage_dealt !== oldDamage || p.damage_taken !== oldDamageTaken || p.phantom_hits !== oldPhantom || oldMmr !== p.mmr);
-
-      return res.status(200).json({ success: true, delta_sync: !hasStatChanges });
+      if (hasChanges || !pData) {
+        await supabase.from('players').upsert(p);
+      }
+      return res.status(200).json({ success: true, delta_sync: !hasChanges });
     } catch (error) {
+      console.error(error);
       return res.status(500).json({ error: 'Write error' });
     }
   }

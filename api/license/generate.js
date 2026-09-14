@@ -1,7 +1,7 @@
-import { Redis } from '@upstash/redis';
+import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
 
-const redis = Redis.fromEnv();
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 const ADMIN_SECRET = process.env.ADMIN_SECRET_KEY;
 
 export default async function handler(req, res) {
@@ -33,6 +33,7 @@ export default async function handler(req, res) {
   }
 
   const licenseData = {
+    key: key,
     duration_days: parseInt(duration_days),
     max_devices: parseInt(max_devices),
     max_accounts: parseInt(max_accounts),
@@ -41,7 +42,10 @@ export default async function handler(req, res) {
     banned: false
   };
 
-  await redis.set(`license:${key}`, JSON.stringify(licenseData));
+  const { error } = await supabase.from('licenses').insert(licenseData);
+  if (error) {
+     return res.status(500).json({ error: 'Veritabanı hatası', details: error.message });
+  }
 
   return res.status(200).json({
     success: true,

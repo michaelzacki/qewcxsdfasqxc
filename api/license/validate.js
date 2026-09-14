@@ -1,7 +1,7 @@
-import { Redis } from '@upstash/redis';
+import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
 
-const redis = Redis.fromEnv();
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 const HMAC_SECRET = process.env.HMAC_SECRET_KEY;
 
 export const config = {
@@ -40,19 +40,17 @@ export default async function handler(req, res) {
   }
 
   try {
-    const isSteamBanned = await redis.sismember('banned_steam_ids', steam_id);
-    const isHwidBanned = await redis.sismember('banned_hwids', hwid);
-
-    if (isSteamBanned || isHwidBanned) {
+    // Check Bans
+    const { data: bans } = await supabase.from('bans').select('value').in('value', [steam_id, hwid]);
+    if (bans && bans.length > 0) {
       return res.status(403).json({ valid: false, reason: 'banned', message: 'This hardware or account has been PERMANENTLY BANNED from the mod.' });
     }
 
-    const licenseStr = await redis.get(`license:${key}`);
-    if (!licenseStr) {
+    // Check License
+    const { data: license } = await supabase.from('licenses').select('*').eq('key', key).single();
+    if (!license) {
       return res.status(404).json({ valid: false, reason: 'invalid_key', message: 'License key is invalid or not found.' });
     }
-
-    let license = typeof licenseStr === 'string' ? JSON.parse(licenseStr) : licenseStr;
 
     if (license.banned) {
       return res.status(403).json({ valid: false, reason: 'banned', message: 'This license key has been revoked.' });
@@ -70,23 +68,33 @@ export default async function handler(req, res) {
       return res.status(403).json({ valid: false, reason: 'expired', message: 'Your license has expired.' });
     }
 
-    if (!license.accounts) license.accounts = [];
-    if (!license.accounts.includes(steam_id)) {
-      if (license.accounts.length >= license.max_accounts) {
+    let accounts = license.accounts || [];
+    let devices = license.devices || [];
+    let updated = false;
+
+    if (!accounts.includes(steam_id)) {
+      if (accounts.length >= license.max_accounts) {
         return res.status(403).json({ valid: false, reason: 'max_accounts_reached', message: `This key has reached the maximum Steam account limit (${license.max_accounts}).` });
       }
-      license.accounts.push(steam_id);
+      accounts.push(steam_id);
+      updated = true;
     }
 
-    if (!license.devices) license.devices = [];
-    if (!license.devices.includes(hwid)) {
-      if (license.devices.length >= license.max_devices) {
+    if (!devices.includes(hwid)) {
+      if (devices.length >= license.max_devices) {
         return res.status(403).json({ valid: false, reason: 'max_devices_reached', message: `This key has reached the maximum hardware limit (${license.max_devices}).` });
       }
-      license.devices.push(hwid);
+      devices.push(hwid);
+      updated = true;
     }
 
-    await redis.set(`license:${key}`, JSON.stringify(license));
+    if (updated || !license.expires_at) { // if expires_at was just set or arrays updated
+      await supabase.from('licenses').update({
+         expires_at: license.expires_at,
+         accounts: accounts,
+         devices: devices
+      }).eq('key', key);
+    }
 
     const daysRemaining = Math.floor((expiresAt - now) / (1000 * 60 * 60 * 24));
 
@@ -95,9 +103,9 @@ export default async function handler(req, res) {
       expires_at: license.expires_at,
       days_remaining: daysRemaining,
       max_devices: license.max_devices,
-      registered_devices: license.devices.length,
+      registered_devices: devices.length,
       max_accounts: license.max_accounts,
-      registered_accounts: license.accounts.length
+      registered_accounts: accounts.length
     });
 
   } catch (err) {
