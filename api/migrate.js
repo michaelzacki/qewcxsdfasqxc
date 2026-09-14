@@ -101,7 +101,91 @@ export default async function handler(req, res) {
       }
     }
 
-    return res.status(200).json({ success: true, migrated_players: playerRows.length });
+    // 4. Migrate Licenses
+    const keys = await redis.keys('license:*');
+    let licenseCount = 0;
+    if (keys.length > 0) {
+      const values = await redis.mget(...keys);
+      const licenseRows = [];
+      for (let i = 0; i < keys.length; i++) {
+        const rawKeyStr = keys[i].replace('license:', '');
+        let lStr = values[i];
+        let l = null;
+        if (lStr) {
+           try { l = typeof lStr === 'string' ? JSON.parse(lStr) : lStr; } catch(e) {}
+        }
+        if (l) {
+          let expAt = null;
+          if (l.expires_at) {
+             expAt = new Date(l.expires_at).toISOString();
+          }
+          licenseRows.push({
+            key: rawKeyStr,
+            duration_days: l.duration_days || 30,
+            max_devices: l.max_devices || 1,
+            max_accounts: l.max_accounts || 1,
+            banned: l.banned || false,
+            expires_at: expAt,
+            devices: Array.isArray(l.devices) ? l.devices : [],
+            accounts: Array.isArray(l.accounts) ? l.accounts : []
+          });
+        }
+      }
+      
+      for (let i = 0; i < licenseRows.length; i += 50) {
+        const batch = licenseRows.slice(i, i + 50);
+        const { error: lErr } = await supabase.from('licenses').upsert(batch, { onConflict: 'key' });
+        if (lErr) console.error(`License migration error:`, lErr);
+      }
+      licenseCount = licenseRows.length;
+    }
+
+    // 5. Migrate Bans
+    const bans = await redis.smembers('bans:global');
+    let banCount = 0;
+    if (bans && bans.length > 0) {
+      const banRows = bans.map(b => {
+        return {
+          value: b,
+          reason: 'Migrated from Redis',
+          banned_at: new Date().toISOString()
+        };
+      });
+      for (let i = 0; i < banRows.length; i += 50) {
+        const batch = banRows.slice(i, i + 50);
+        const { error: banErr } = await supabase.from('bans').upsert(batch, { onConflict: 'value' });
+        if (banErr) console.error(`Ban migration error:`, banErr);
+      }
+      banCount = bans.length;
+    }
+
+    // 6. Migrate Broadcasts
+    const broadcastStr = await redis.get('broadcast:current');
+    let broadcastCount = 0;
+    if (broadcastStr) {
+      let b = null;
+      try { b = typeof broadcastStr === 'string' ? JSON.parse(broadcastStr) : broadcastStr; } catch(e){}
+      if (b) {
+        const { error: bcErr } = await supabase.from('broadcasts').upsert({
+          id: 1,
+          message: b.message || '',
+          url: b.url || '',
+          color: b.color || '#ff0000',
+          active: true,
+          created_at: new Date().toISOString()
+        });
+        if (bcErr) console.error('Broadcast migration error:', bcErr);
+        else broadcastCount = 1;
+      }
+    }
+
+    return res.status(200).json({ 
+      success: true, 
+      migrated_players: playerRows.length, 
+      migrated_licenses: licenseCount,
+      migrated_bans: banCount,
+      migrated_broadcasts: broadcastCount
+    });
 
   } catch (err) {
     console.error(err);
