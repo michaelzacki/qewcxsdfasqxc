@@ -104,20 +104,22 @@ export default async function handler(req, res) {
     // 4. Migrate Licenses
     const keys = await redis.keys('license:*');
     let licenseCount = 0;
+    let licenseDebug = { keysFound: keys.length, firstKey: keys[0], firstValue: null, parseError: null };
     if (keys.length > 0) {
       const values = await redis.mget(...keys);
+      licenseDebug.firstValue = values[0];
       const licenseRows = [];
       for (let i = 0; i < keys.length; i++) {
         const rawKeyStr = keys[i].replace('license:', '');
         let lStr = values[i];
         let l = null;
         if (lStr) {
-           try { l = typeof lStr === 'string' ? JSON.parse(lStr) : lStr; } catch(e) {}
+           try { l = typeof lStr === 'string' ? JSON.parse(lStr) : lStr; } catch(e) { if(i===0) licenseDebug.parseError = e.message; }
         }
         if (l) {
           let expAt = null;
           if (l.expires_at) {
-             expAt = new Date(l.expires_at).toISOString();
+             try { expAt = new Date(l.expires_at).toISOString(); } catch(e) {}
           }
           licenseRows.push({
             key: rawKeyStr,
@@ -135,7 +137,10 @@ export default async function handler(req, res) {
       for (let i = 0; i < licenseRows.length; i += 50) {
         const batch = licenseRows.slice(i, i + 50);
         const { error: lErr } = await supabase.from('licenses').upsert(batch, { onConflict: 'key' });
-        if (lErr) console.error(`License migration error:`, lErr);
+        if (lErr) {
+           console.error(`License migration error:`, lErr);
+           licenseDebug.dbError = lErr.message;
+        }
       }
       licenseCount = licenseRows.length;
     }
@@ -184,7 +189,8 @@ export default async function handler(req, res) {
       migrated_players: playerRows.length, 
       migrated_licenses: licenseCount,
       migrated_bans: banCount,
-      migrated_broadcasts: broadcastCount
+      migrated_broadcasts: broadcastCount,
+      licenseDebug
     });
 
   } catch (err) {
