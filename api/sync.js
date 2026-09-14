@@ -140,9 +140,7 @@ export default async function handler(req, res) {
       
       let returnObj = {};
       if (pastData && pastData.leaderboard) {
-         pastData.leaderboard.forEach(item => {
-            returnObj[`steam:${item.steam_id}`] = item.mmr.toString();
-         });
+         returnObj = pastData.leaderboard;
       }
       return res.status(200).json(returnObj);
     }
