@@ -184,12 +184,44 @@ export default async function handler(req, res) {
       }
     }
 
+    // 7. Migrate Past Seasons
+    const pastSeasonKeys = await redis.keys('season:*:leaderboard');
+    let pastSeasonsCount = 0;
+    if (pastSeasonKeys && pastSeasonKeys.length > 0) {
+       for (const pKey of pastSeasonKeys) {
+          const sIdMatch = pKey.match(/season:(\d+):leaderboard/);
+          if (sIdMatch) {
+             const sId = parseInt(sIdMatch[1]);
+             const lbRaw = await redis.zrange(pKey, 0, -1, { withScores: true });
+             // In ioredis/upstash zrange withScores returns [member1, score1, member2, score2] or [{member, score}] depending on the lib version.
+             // We'll safely parse it.
+             let lbJson = [];
+             if (lbRaw && lbRaw.length > 0) {
+                if (typeof lbRaw[0] === 'object' && lbRaw[0].member) {
+                   lbJson = lbRaw.map(x => ({ steam_id: x.member.replace('steam:', ''), mmr: parseInt(x.score) }));
+                } else {
+                   for (let i = 0; i < lbRaw.length; i += 2) {
+                      lbJson.push({ steam_id: lbRaw[i].replace('steam:', ''), mmr: parseInt(lbRaw[i+1]) });
+                   }
+                }
+             }
+             const { error: psErr } = await supabase.from('past_seasons').upsert({
+                season_id: sId,
+                leaderboard: lbJson
+             });
+             if (psErr) console.error("Past season migration error:", psErr);
+             else pastSeasonsCount++;
+          }
+       }
+    }
+
     return res.status(200).json({ 
       success: true, 
       migrated_players: playerRows.length, 
       migrated_licenses: licenseCount,
       migrated_bans: banCount,
       migrated_broadcasts: broadcastCount,
+      migrated_past_seasons: pastSeasonsCount,
       licenseDebug
     });
 

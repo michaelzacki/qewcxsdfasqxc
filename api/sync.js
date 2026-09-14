@@ -115,8 +115,13 @@ export default async function handler(req, res) {
           }
         }
 
+        let returnSeason = { ...currentSeason };
+        if (returnSeason.end_time) {
+          returnSeason.end_date = new Date(returnSeason.end_time).toISOString();
+        }
+
         return res.status(200).json({
-          season: currentSeason,
+          season: returnSeason,
           leaderboard: leaderboard,
           my_rewards: my_rewards,
           permanent_rewards: permanent_rewards,
@@ -129,8 +134,17 @@ export default async function handler(req, res) {
     }
 
     if (action === 'past_season') {
-      // Past seasons aren't explicitly saved as snapshots in Supabase right now.
-      return res.status(200).json({});
+      const seasonIdStr = url.searchParams.get('season_id');
+      if (!seasonIdStr) return res.status(400).json({ error: 'season_id required' });
+      const { data: pastData } = await supabase.from('past_seasons').select('leaderboard').eq('season_id', parseInt(seasonIdStr)).single();
+      
+      let returnObj = {};
+      if (pastData && pastData.leaderboard) {
+         pastData.leaderboard.forEach(item => {
+            returnObj[`steam:${item.steam_id}`] = item.mmr.toString();
+         });
+      }
+      return res.status(200).json(returnObj);
     }
 
     try {
