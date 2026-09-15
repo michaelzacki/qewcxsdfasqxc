@@ -28,12 +28,16 @@ export default async function handler(req, res) {
     }
 
     if (action === 'get_live_players') {
-      const { data: players } = await supabase.from('players').select('*').gt('last_request_time', Date.now() - 120000);
+      const twoMinsAgo = Date.now() - (2 * 60 * 1000);
+      const { data: players } = await supabase.from('players')
+        .select('*')
+        .gt('last_request_time', twoMinsAgo)
+        .not('telemetry', 'is', null);
       return res.status(200).json(players || []);
     }
 
     if (action === 'get_killfeed') {
-      const { data: kills } = await supabase.from('kill_feed').select('*').order('created_at', { ascending: false }).limit(20);
+      const { data: kills } = await supabase.from('kill_feed').select('*').order('created_at', { ascending: false }).limit(50);
       return res.status(200).json(kills || []);
     }
 
