@@ -108,7 +108,16 @@ export default async function handler(req, res) {
     if (action === 'create_broadcast') {
       const { data } = payload;
       if (!data) return res.status(400).json({ error: 'Missing data' });
-      await supabase.from('broadcasts').insert(data);
+      
+      const insertData = {
+          title: data.title,
+          message: data.message,
+          expires_at: Date.now() + (data.duration_seconds * 1000),
+          sound: data.sound,
+          target_steam_ids: data.target_steam_ids
+      };
+      
+      await supabase.from('broadcasts').insert(insertData);
       return res.status(200).json({ success: true });
     }
 
