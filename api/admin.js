@@ -20,6 +20,13 @@ export default async function handler(req, res) {
   if (!action) return res.status(400).json({ error: 'No action provided' });
 
   try {
+    if (action === 'get_config') {
+      return res.status(200).json({ 
+        supabase_url: process.env.SUPABASE_URL, 
+        supabase_anon_key: process.env.SUPABASE_ANON_KEY 
+      });
+    }
+
     if (action === 'get_live_players') {
       const { data: players } = await supabase.from('players').select('*').gt('last_request_time', Date.now() - 120000);
       return res.status(200).json(players || []);
@@ -49,6 +56,11 @@ export default async function handler(req, res) {
     if (action === 'get_season') {
       const { data: currentSeason } = await supabase.from('seasons').select('*').eq('status', 'active').order('season_id', { ascending: false }).limit(1).single();
       return res.status(200).json(currentSeason || null);
+    }
+
+    if (action === 'get_past_seasons') {
+      const { data: pastSeasons } = await supabase.from('past_seasons').select('season_id, created_at').order('season_id', { ascending: false });
+      return res.status(200).json(pastSeasons || []);
     }
 
     if (action === 'update_season') {
@@ -101,6 +113,57 @@ export default async function handler(req, res) {
 
     if (action === 'clear_broadcast') {
       await supabase.from('broadcasts').delete().neq('id', '0'); // delete all
+      return res.status(200).json({ success: true });
+    }
+
+    // --- LICENSES ---
+    if (action === 'get_licenses') {
+      const { data: licenses } = await supabase.from('licenses').select('*').order('created_at', { ascending: false });
+      return res.status(200).json(licenses || []);
+    }
+    if (action === 'delete_license') {
+      const { key } = payload;
+      if (!key) return res.status(400).json({ error: 'Missing key' });
+      await supabase.from('licenses').delete().eq('key', key);
+      return res.status(200).json({ success: true });
+    }
+
+    // --- BANS ---
+    if (action === 'get_bans') {
+      const { data: bans } = await supabase.from('bans').select('*').order('created_at', { ascending: false });
+      return res.status(200).json(bans || []);
+    }
+    if (action === 'ban_player') {
+      const { steam_id, reason, expires_at } = payload;
+      if (!steam_id) return res.status(400).json({ error: 'Missing steam_id' });
+      await supabase.from('bans').insert({ steam_id, reason: reason || 'Banned by admin', expires_at: expires_at || null });
+      
+      // Also kick the player immediately by modifying their memory/state if needed
+      // (This can be handled via live broadcast or memory injection in C++)
+      return res.status(200).json({ success: true });
+    }
+    if (action === 'unban_player') {
+      const { steam_id } = payload;
+      if (!steam_id) return res.status(400).json({ error: 'Missing steam_id' });
+      await supabase.from('bans').delete().eq('steam_id', steam_id);
+      return res.status(200).json({ success: true });
+    }
+
+    // --- BOUNTIES ---
+    if (action === 'get_bounties') {
+      const { data: bounties } = await supabase.from('bounties').select('*').order('created_at', { ascending: false });
+      return res.status(200).json(bounties || []);
+    }
+    if (action === 'create_bounty') {
+      const { data } = payload;
+      if (!data) return res.status(400).json({ error: 'Missing data' });
+      await supabase.from('bounties').insert(data);
+      return res.status(200).json({ success: true });
+    }
+    if (action === 'delete_bounty') {
+      const { id } = payload;
+      if (!id) return res.status(400).json({ error: 'Missing id' });
+      await supabase.from('bounties').delete().eq('id', id);
       return res.status(200).json({ success: true });
     }
 
