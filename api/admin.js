@@ -59,7 +59,8 @@ export default async function handler(req, res) {
     }
 
     if (action === 'get_past_seasons') {
-      const { data: pastSeasons } = await supabase.from('past_seasons').select('season_id, created_at').order('season_id', { ascending: false });
+      const { data: pastSeasons, error } = await supabase.from('past_seasons').select('*');
+      if (error) console.error('[ADMIN] get_past_seasons error:', error);
       return res.status(200).json(pastSeasons || []);
     }
 
@@ -118,7 +119,8 @@ export default async function handler(req, res) {
 
     // --- LICENSES ---
     if (action === 'get_licenses') {
-      const { data: licenses } = await supabase.from('licenses').select('*').order('created_at', { ascending: false });
+      const { data: licenses, error } = await supabase.from('licenses').select('*');
+      if (error) console.error('[ADMIN] get_licenses error:', error);
       return res.status(200).json(licenses || []);
     }
     if (action === 'delete_license') {
