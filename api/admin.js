@@ -191,6 +191,12 @@ export default async function handler(req, res) {
       await supabase.from('bounties').delete().neq('bounty_id', '0'); 
       return res.status(200).json({ success: true });
     }
+    if (action === 'manual_bounty_kill') {
+      const { bounty_id, killed_steam_id } = payload;
+      if (!bounty_id || !killed_steam_id) return res.status(400).json({ error: 'Missing parameters' });
+      await supabase.from('bounty_members').update({ is_killed: true }).eq('bounty_id', bounty_id).eq('steam_id', killed_steam_id);
+      return res.status(200).json({ success: true });
+    }
 
     return res.status(400).json({ error: 'Unknown action' });
   } catch (err) {
