@@ -171,7 +171,7 @@ export default async function handler(req, res) {
 
     // --- BOUNTIES ---
     if (action === 'get_bounties') {
-      const { data: bounties } = await supabase.from('bounties').select('*').order('created_at', { ascending: false });
+      const { data: bounties } = await supabase.from('bounties').select('*, bounty_members(*)').order('created_at', { ascending: false });
       return res.status(200).json(bounties || []);
     }
     if (action === 'create_bounty') {
@@ -183,7 +183,12 @@ export default async function handler(req, res) {
     if (action === 'delete_bounty') {
       const { id } = payload;
       if (!id) return res.status(400).json({ error: 'Missing id' });
-      await supabase.from('bounties').delete().eq('id', id);
+      await supabase.from('bounties').delete().eq('bounty_id', id);
+      return res.status(200).json({ success: true });
+    }
+    if (action === 'clear_bounties') {
+      // Delete all past bounties
+      await supabase.from('bounties').delete().neq('bounty_id', '0'); 
       return res.status(200).json({ success: true });
     }
 
