@@ -84,29 +84,19 @@ export default async function handler(req, res) {
       return res.status(200).json({ success: true });
     }
 
-    if (action === 'restart_season') {
-      const { data: currentSeason } = await supabase.from('seasons').select('*').eq('status', 'active').order('season_id', { ascending: false }).limit(1).single();
-      if (currentSeason) {
-        // Mark old season as inactive
-        await supabase.from('seasons').update({ status: 'inactive' }).eq('season_id', currentSeason.season_id);
-        
-        // Start new season
-        const nextId = currentSeason.season_id + 1;
-        const now = Date.now();
-        await supabase.from('seasons').insert({
-           season_id: nextId,
-           start_time: now,
-           end_time: now + 30 * 24 * 60 * 60 * 1000,
-           status: 'active'
-        });
-        
-        // Reset player stats
-        await supabase.from('players').update({
-           kills: 0, deaths: 0, assists: 0, damage_dealt: 0, damage_taken: 0, phantom_hits: 0, mmr: 1000, rank: 'Sentinel',
-           damage_breakdown: { physical: 0, magic: 0, fire: 0, lightning: 0, holy: 0 }
-        }).neq('steam_id', '0'); // update all
+    if (action === 'restart_season' || action === 'end_season') {
+      const { data, error } = await supabase.rpc('rpc_restart_season');
+      
+      if (error) {
+        console.error('[ADMIN] Season Restart Error:', error);
+        return res.status(500).json({ error: 'Supabase RPC Error', details: error.message });
       }
-      return res.status(200).json({ success: true });
+      
+      if (data && !data.success) {
+         return res.status(400).json({ error: data.error || 'Failed to restart season' });
+      }
+      
+      return res.status(200).json({ success: true, message: 'Sezon başarıyla bitti, veriler arşivlendi, ödüller dağıtıldı ve yeni sezon başladı!' });
     }
 
     if (action === 'create_broadcast') {
